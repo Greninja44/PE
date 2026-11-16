@@ -20,7 +20,8 @@ MODELS: dict[str, tuple[str, list[str], str, bool]] = {
     "sd_turbo": ("stabilityai/sd-turbo",
                  ["*/diffusion_pytorch_model.fp16.safetensors", "*/model.fp16.safetensors", "*/*.json", "*/*.txt",
                   "model_index.json"], "~2.6 GB", True),
-    "clip_b32": ("openai/clip-vit-base-patch32", ["model.safetensors", *CONFIGS], "~0.6 GB", True),
+    # This repo publishes only pytorch_model.bin on its main branch (no safetensors).
+    "clip_b32": ("openai/clip-vit-base-patch32", ["pytorch_model.bin", *CONFIGS], "~0.6 GB", True),
     "dinov2_base": ("facebook/dinov2-base", ["model.safetensors", *CONFIGS], "~0.35 GB", True),
     "clip_l14": ("openai/clip-vit-large-patch14", ["model.safetensors", *CONFIGS], "~1.7 GB", True),
     "sd15": ("stable-diffusion-v1-5/stable-diffusion-v1-5",
@@ -52,7 +53,13 @@ def main() -> int:
         repo, patterns, size, _ = MODELS[k]
         print(f"→ {k}: {repo} ({size})", flush=True)
         path = snapshot_download(repo, allow_patterns=patterns)
-        print(f"  ✓ {path}", flush=True)
+        from pathlib import Path
+
+        weights = [w for ext in ("*.safetensors", "*.bin") for w in Path(path).rglob(ext)]
+        if not weights:  # configs alone are not a usable model — never report success without weights
+            print(f"  ✗ {k}: no weight files matched {patterns}", file=sys.stderr, flush=True)
+            return 1
+        print(f"  ✓ {path} ({len(weights)} weight file(s))", flush=True)
     print("LPIPS (AlexNet) weights ship with the `lpips` package; torchvision fetches the AlexNet backbone (~230 MB) "
           "on first use.")
     return 0

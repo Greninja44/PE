@@ -260,7 +260,7 @@ def test_diffusers_runner_rejects_black_nan_output():
 
     r = DiffusersRunner.__new__(DiffusersRunner)
     r.torch, r.spec, r.device, r.dtype, r.offload = torch, MODEL_REGISTRY["sd_turbo"], "cpu", torch.float16, False
-    r.weights_variant, r.attention_slicing, r.pipe = "fp16", False, lambda **kw: Result()
+    r.weights_variant, r.attention_slicing, r.pipe, r._calls = "fp16", False, lambda **kw: Result(), 0
     with pytest.raises(RuntimeError, match="all-black"):
         r.generate("a cat", GenerationParams(model_key="sd_turbo"))
     Result.nsfw_content_detected = [True]  # safety-checker black frames are recorded, not raised
@@ -281,3 +281,22 @@ def test_clip_embedding_handles_tensor_and_model_output():
         m._processor = lambda images, return_tensors: SimpleNamespace(to=lambda d: {})
         m._model = SimpleNamespace(get_image_features=lambda **kw: ret)
         assert torch.equal(m._embed(None), emb)
+
+
+def test_diffusers_runner_flags_first_call_warmup():
+    pytest.importorskip("diffusers")
+    torch = pytest.importorskip("torch")
+    from app.generation.base import MODEL_REGISTRY, GenerationParams
+    from app.generation.providers import DiffusersRunner
+
+    class Result:
+        images = [PILImage.new("RGB", (512, 512), (90, 120, 150))]
+        nsfw_content_detected = None
+
+    r = DiffusersRunner.__new__(DiffusersRunner)
+    r.torch, r.spec, r.device, r.dtype, r.offload = torch, MODEL_REGISTRY["sd_turbo"], "cpu", torch.float32, False
+    r.weights_variant, r.attention_slicing, r.pipe, r._calls = None, False, lambda **kw: Result(), 0
+    first = r.generate("a", GenerationParams(model_key="sd_turbo"))
+    second = r.generate("a", GenerationParams(model_key="sd_turbo"))
+    assert first.runtime_info["first_call_after_load"] is True
+    assert second.runtime_info["first_call_after_load"] is False

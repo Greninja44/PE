@@ -40,6 +40,13 @@ COMPARISON_METRICS = ("clip_l14", "dinov2_base", "ssim", "lpips_alex", "clip_b32
 CONFIG_KEYS = ("model_key", "seed", "steps", "cfg_scale", "width", "height")
 
 
+def includes_warmup(g: GenerationRun) -> bool:
+    """First generation after a model load (flagged by the runner; for older rows, a model load inside the same
+    job implies it)."""
+    ri = g.runtime_info or {}
+    return bool(ri.get("first_call_after_load")) or (ri.get("model_load_s") or 0) > 0.5
+
+
 def config_key(g: GenerationRun) -> tuple[Any, ...]:
     p = g.params or {}
     return tuple([g.model_key] + [p.get(k) for k in CONFIG_KEYS[1:]])
@@ -93,6 +100,7 @@ def generation_row(g: GenerationRun, ref: dict[str, Any] | None, ratings: list[H
         "model_key": g.model_key, "params": {k: (g.params or {}).get(k) for k in CONFIG_KEYS[1:]},
         "config_key": "|".join(str(x) for x in config_key(g)),
         "device": (g.runtime_info or {}).get("device"), "generation_s": g.duration_s,
+        "includes_warmup": includes_warmup(g),
         "peak_memory_gb": ((g.runtime_info or {}).get("memory") or {}).get("peak_process_gb"),
         "refinement_session_id": ref["session_id"] if ref else None,
         "refinement_iteration": ref["iteration"] if ref else None,
@@ -152,8 +160,8 @@ def aggregate(db: Session, experiment_id: str | None = None) -> dict[str, Any]:
                 if m.role == "evaluation" and m.status == "completed" and m.value is not None:
                     by_group[grp][m.metric].append(m.value)
             human[grp].extend(h.similarity for h in ratings.get(g.id, []))
-            if g.duration_s is not None:
-                extras[grp]["generation_s"].append(g.duration_s)
+            if g.duration_s is not None and not includes_warmup(g):
+                extras[grp]["generation_s"].append(g.duration_s)  # warm-up runs excluded from timing
             extras[grp]["prompt_clip_tokens_approx"].append(approx_clip_tokens(g.prompt_version.positive))
             if ref and grp.startswith("C_refined"):
                 extras[grp]["iterations_executed"].append(ref["iterations_executed"])
@@ -202,5 +210,6 @@ def aggregate(db: Session, experiment_id: str | None = None) -> dict[str, Any]:
             "notes": ["Values are genuine completed metric results; missing values are excluded, never imputed.",
                       "C_refined_best is selected by the optimisation metric after the fact and is biased upward.",
                       "Views overlap (a generation can be both final and best); do not sum their n.",
+                      "Generation time excludes the first run after a model load (one-off warm-up).",
                       "Paired comparisons use only generations of the same reference with identical model, seed, "
                       "steps, CFG and resolution."]}

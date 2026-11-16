@@ -69,7 +69,7 @@ def _hf_cached(repo_id: str) -> bool | None:
             return False
         if not all((idx.parent / s).exists() for s in shards):
             return False
-    return any(p.exists() for p in snaps.glob("*/**/*.safetensors"))
+    return any(p.exists() for ext in ("*.safetensors", "*.bin") for p in snaps.glob(f"*/**/{ext}"))
 
 
 @router.get("/system")

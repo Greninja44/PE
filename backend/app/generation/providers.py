@@ -111,6 +111,7 @@ class DiffusersRunner:
         if self.attention_slicing:
             self.pipe.enable_attention_slicing()
         self.pipe.set_progress_bar_config(disable=True)
+        self._calls = 0
 
     def generate(self, prompt: str, params: GenerationParams, progress_cb=None) -> GenerationOutput:  # noqa: ANN001
         import diffusers
@@ -152,7 +153,11 @@ class DiffusersRunner:
             "generator_device": gen_device, "weights_variant": self.weights_variant,
             "attention_slicing": self.attention_slicing,
             "negative_prompt_applied": "negative_prompt" in kwargs,
+            # The first call after loading includes one-off kernel compilation / warm-up (measured on MPS: ~5 s vs
+            # ~0.3 s for SD-Turbo); comparisons of generation time must exclude it.
+            "first_call_after_load": self._calls == 0,
         }
+        self._calls += 1
         if nsfw is not None:
             runtime["nsfw_flagged"] = flagged
         if self.device == "cuda":
