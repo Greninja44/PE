@@ -1,9 +1,10 @@
 import clsx from "clsx";
 import {
-  Beaker, BookOpen, Cpu, FlaskConical, Gauge, ImagePlus, Lightbulb, MonitorPlay, Repeat2, ScanSearch, Sparkles, Wand2,
+  Beaker, BookOpen, Columns3, FlaskConical, Gauge, ImagePlus, Lightbulb, MonitorPlay, Repeat2, ScanSearch, Sparkles, Wand2,
 } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { ReconstructionPicker } from "../components/ReconstructionPicker";
+import { WorkerBadge } from "../components/WorkerStatus";
 import { useApi } from "../hooks/useApi";
 import { api } from "../services/api";
 
@@ -20,6 +21,7 @@ const NAV = [
     { to: "/refinement", label: "5 · Refinement", icon: Repeat2 },
   ] },
   { group: "Research", items: [
+    { to: "/compare", label: "Compare & Rate", icon: Columns3 },
     { to: "/experiments", label: "Experiments", icon: FlaskConical },
     { to: "/findings", label: "Research Findings", icon: Lightbulb },
     { to: "/methodology", label: "Methodology", icon: BookOpen },
@@ -30,7 +32,6 @@ const NAV = [
 export function AppLayout() {
   const { search } = useLocation();
   const sys = useApi(() => api.system(), [], { pollMs: 10000 });
-  const online = sys.data?.gpu_worker_online;
   const q = sys.data?.jobs;
   return (
     <div className="flex min-h-screen">
@@ -63,14 +64,7 @@ export function AppLayout() {
           ))}
         </nav>
         <div className="border-t border-ink-700/70 px-5 py-4 text-xs">
-          <div className="flex items-center gap-2">
-            <Cpu className="h-4 w-4 text-slate-400" />
-            <span className="text-slate-300">GPU worker</span>
-            <span className={clsx("ml-auto inline-flex items-center gap-1.5", online ? "text-emerald-300" : "text-slate-500")}>
-              <span className={clsx("h-2 w-2 rounded-full", online ? "bg-emerald-400 shadow-[0_0_8px] shadow-emerald-400" : "bg-slate-600")} />
-              {online ? "online" : "offline"}
-            </span>
-          </div>
+          <WorkerBadge sys={sys.data} />
           {q && <p className="mt-1.5 text-slate-500">{q.queued} queued · {q.running} running · {q.failed} failed</p>}
           {sys.data?.code && <p className="mono mt-1.5 truncate text-[11px] text-slate-600" title="code fingerprint">
             {sys.data.code.git_commit?.slice(0, 7) ?? "no-git"}{sys.data.code.git_dirty ? "+dirty" : ""} · src {sys.data.code.source_sha256}</p>}

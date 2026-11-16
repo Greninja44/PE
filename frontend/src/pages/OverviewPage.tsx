@@ -6,11 +6,12 @@ import { useActiveReconstruction } from "../hooks/useActiveReconstruction";
 import { fmtTime, shortId } from "../lib/format";
 import { api } from "../services/api";
 import { Card, Empty, Notice, Pill, StatusBadge } from "../components/ui";
+import { WorkerPanel } from "../components/WorkerStatus";
 
 const STAGES = [
   { n: 1, title: "Image Analysis", icon: ScanSearch, to: "/analysis", text: "Qwen3-VL extracts structured attributes as JSON." },
   { n: 2, title: "Prompt Studio", icon: Wand2, to: "/prompts", text: "Fixed templates → positive & negative prompts, validated." },
-  { n: 3, title: "Generation", icon: Sparkles, to: "/generation", text: "SD 1.5 · SD-Turbo · SDXL with explicit seeds & params." },
+  { n: 3, title: "Generation", icon: Sparkles, to: "/generation", text: "SD-Turbo · SD 1.5 (SDXL optional) with explicit seeds & params." },
   { n: 4, title: "Evaluation", icon: Beaker, to: "/evaluation", text: "CLIP · DINOv2 · SSIM · LPIPS, reported separately." },
   { n: 5, title: "Refinement", icon: Repeat2, to: "/refinement", text: "Proposals → approve/reject → early stopping." },
 ];
@@ -48,13 +49,13 @@ export function OverviewPage() {
               <div className="flex items-center gap-3 rounded-lg border border-ink-700 bg-ink-850 p-3">
                 <Cpu className={s.gpu_worker_online ? "h-5 w-5 text-emerald-400" : "h-5 w-5 text-slate-500"} />
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium text-slate-100">GPU worker {s.gpu_worker_online ? "online" : "offline"}</p>
+                  <p className="font-medium text-slate-100">Inference worker {s.gpu_worker_online ? "online" : "offline"}</p>
                   <p className="truncate text-xs text-slate-400">
                     {s.workers.length ? s.workers.map((w) => `${w.name}${w.online ? "" : " (idle)"}`).join(", ") : "No worker registered yet"}
                   </p>
                 </div>
               </div>
-              {!s.gpu_worker_online && <Notice tone="warn">Worker jobs (Qwen3-VL, diffusion, CLIP/DINOv2/LPIPS) will wait in the queue until a GPU worker connects. See <span className="mono">docs/RTX5060_SETUP.md</span>.</Notice>}
+              {!s.gpu_worker_online && <Notice tone="warn">Worker jobs (Qwen3-VL, diffusion, CLIP/DINOv2/LPIPS) wait in the queue until an inference worker connects. On this Mac, <span className="mono">scripts/dev.sh</span> starts one automatically.</Notice>}
               {[["Vision-language", s.vlm_providers], ["Generation", s.generation_providers]].map(([label, list]) => (
                 <div key={label as string}>
                   <p className="label mb-1.5">{label as string}</p>
@@ -77,7 +78,7 @@ export function OverviewPage() {
                   {s.metrics.map((m) => (
                     <li key={m.key} className="flex items-center justify-between gap-2">
                       <span className="text-slate-300">{m.label}</span>
-                      <Pill tone={m.execution === "inline" ? "emerald" : "accent"}>{m.execution === "inline" ? "runs here" : "GPU worker"}</Pill>
+                      <span className="flex items-center gap-1.5"><span className="text-xs text-slate-500" title={m.higher_is_better ? "Higher is closer to the reference" : "Lower is closer to the reference"}>{m.higher_is_better ? "↑ better" : "↓ better"}</span><Pill tone={m.execution === "inline" ? "emerald" : "accent"}>{m.execution === "inline" ? "runs in API" : "worker"}</Pill></span>
                     </li>
                   ))}
                 </ul>
@@ -86,7 +87,11 @@ export function OverviewPage() {
           ) : <p className="text-sm text-slate-400">Connecting to backend…</p>}
         </Card>
 
-        <Card title="Reconstructions" subtitle="Reference images under study" className="xl:col-span-2"
+        <Card title="Model & memory status" subtitle="Live from the inference worker's heartbeat (every ~15 s). Measured, not estimated." className="xl:col-span-2">
+          <WorkerPanel sys={s} />
+        </Card>
+
+        <Card title="Reconstructions" subtitle="Reference images under study" className="xl:col-span-3"
           actions={<Link to={{ pathname: "/new", search }} className="btn-primary">New reconstruction</Link>}>
           {recons.data?.length ? (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -104,7 +109,7 @@ export function OverviewPage() {
           ) : <Empty title="No reconstructions yet">Upload a reference image to begin.</Empty>}
         </Card>
 
-        <Card title="Job queue" subtitle="Work dispatched to the GPU worker" className="xl:col-span-3" pad={false}>
+        <Card title="Job queue" subtitle="Work dispatched to the inference worker" className="xl:col-span-3" pad={false}>
           {jobs.data?.length ? (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

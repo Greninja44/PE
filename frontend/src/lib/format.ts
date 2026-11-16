@@ -14,9 +14,20 @@ export const shortId = (id: string | null | undefined) => (id ? id.slice(0, 8) :
 
 export const CONDITION_LABEL: Record<string, string> = {
   A_caption: "A · Caption only",
+  D_detailed: "D · Detailed prose prompt",
   B_structured: "B · Structured prompt",
   C_refined: "C · Structured + refinement",
 };
+
+/** Analysis groups. Refinement is split into views; "best" is selected post hoc and therefore biased. */
+export const GROUP_LABEL: Record<string, string> = {
+  A_caption: "A · Caption", D_detailed: "D · Detailed prose", B_structured: "B · Structured",
+  C_iter0: "C · iteration 0 (baseline)", C_refined_final: "C · Refined (final iteration)",
+  C_refined_best: "C · Refined (best — selected, biased)", unlabelled: "Unlabelled",
+};
+
+/** Charted groups (one validated colour each). C_iter0 and C_refined_best appear in tables only. */
+export const CHART_GROUPS = ["A_caption", "D_detailed", "B_structured", "C_refined_final"] as const;
 
 export const FIELD_LABEL: Record<string, string> = {
   subject: "Subject", secondary_objects: "Secondary objects", spatial_relationships: "Spatial relationships",

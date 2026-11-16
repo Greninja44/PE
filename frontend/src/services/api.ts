@@ -1,5 +1,5 @@
 import type {
-  Analysis, Attributes, BuiltPrompt, Comparison, DemoBundle, DemoBundleSummary, Experiment, GenParams, Generation,
+  Aggregate, Analysis, Attributes, BuiltPrompt, Comparison, ComparisonTable, HumanRating, DemoBundle, DemoBundleSummary, Experiment, GenParams, Generation,
   Job, MetricResult, PromptDiff, PromptVersion, Reconstruction, ReconstructionSummary, RefinementSession, Stats,
   SystemInfo,
 } from "../types/api";
@@ -66,9 +66,14 @@ export const api = {
   evaluate: (gid: string, metrics: string[], role = "evaluation") =>
     post<MetricResult[]>(`/api/generations/${gid}/evaluate`, { metrics, role }),
 
-  startComparison: (rid: string, body: { caption_prompt_version_id?: string; structured_prompt_version_id?: string; provider: string; params: Partial<GenParams> }) =>
+  startComparison: (rid: string, body: { caption_prompt_version_id?: string; detailed_prompt_version_id?: string; structured_prompt_version_id?: string; provider: string; params: Partial<GenParams> }) =>
     post<Generation[]>(`/api/reconstructions/${rid}/comparison`, body),
   comparison: (rid: string) => request<Comparison>(`/api/reconstructions/${rid}/comparison`),
+  comparisonTable: (rid: string) => request<ComparisonTable>(`/api/reconstructions/${rid}/comparison-table`),
+  experimentComparison: (eid: string) => request<Aggregate>(`/api/experiments/${eid}/comparison`),
+  ratings: (gid: string) => request<HumanRating[]>(`/api/generations/${gid}/ratings`),
+  addRating: (gid: string, body: { rater: string; similarity: number; subject_match?: number | null; style_match?: number | null; blind: boolean; notes: string }) =>
+    post<HumanRating>(`/api/generations/${gid}/ratings`, body),
   exportDemoBundle: (rid: string) => post<{ bundle: string }>(`/api/reconstructions/${rid}/demo-bundle`),
   demoBundles: () => request<DemoBundleSummary[]>("/api/demo/bundles"),
   demoBundle: (id: string) => request<DemoBundle>(`/api/demo/bundles/${id}`),

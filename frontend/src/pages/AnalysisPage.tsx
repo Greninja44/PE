@@ -13,7 +13,7 @@ import type { Analysis, Attributes, Reconstruction } from "../types/api";
 export function AnalysisPage() {
   return (
     <>
-      <PageHeader stage="Stage 1" title="Image analysis" description="A vision-language model describes the reference image as structured JSON. Qwen3-VL-2B runs on the GPU worker; any OpenAI-compatible endpoint can be configured as an alternative." />
+      <PageHeader stage="Stage 1" title="Image analysis" description="A vision-language model describes the reference image as structured JSON. Qwen3-VL-2B runs on the inference worker; any OpenAI-compatible endpoint can be configured as an alternative." />
       <WithReconstruction>{(r, reload) => <AnalysisBody r={r} reload={reload} />}</WithReconstruction>
     </>
   );
@@ -70,7 +70,7 @@ function AnalysisBody({ r, reload }: { r: Reconstruction; reload: () => Promise<
             </Field>
             <ErrorText error={error} />
             <button className="btn-primary w-full" disabled={!prov?.available} onClick={run}><Play className="h-4 w-4" />Run {mode} analysis</button>
-            {prov?.execution === "worker" && !sys.data?.gpu_worker_online && <Notice tone="warn">No GPU worker online — the job will queue until one connects.</Notice>}
+            {prov?.execution === "worker" && !sys.data?.gpu_worker_online && <Notice tone="warn">No inference worker online — the job will queue until one connects.</Notice>}
           </div>
         </Card>
         <Card title="Manual annotation" subtitle="Human-written attributes, stored as provider “manual” — never confused with model output."
@@ -97,15 +97,18 @@ function AnalysisCard({ a, compact }: { a: Analysis; compact?: boolean }) {
   const { search } = useLocation();
   return (
     <Card pad
-      title={<span className="flex flex-wrap items-center gap-2">{a.mode === "structured" ? "Structured analysis" : "Caption"}<StatusBadge status={a.status} />{a.is_manual && <Pill tone="amber">human annotation</Pill>}</span>}
+      title={<span className="flex flex-wrap items-center gap-2">{a.mode === "structured" ? "Structured analysis" : "Caption"}<StatusBadge status={a.status} />{a.is_manual ? <Pill tone="amber">human annotation</Pill> : <Pill tone="cyan">model output</Pill>}</span>}
       subtitle={<span className="mono text-xs">{a.provider} · {a.model}</span>}
       actions={a.status === "completed" && !compact && <Link to={{ pathname: "/prompts", search }} className="btn-secondary"><Wand2 className="h-4 w-4" />Build prompts</Link>}>
       {a.status === "completed" && a.result && <AttributeView a={a.result} />}
       {a.status === "completed" && a.caption && <p className="rounded-lg border border-ink-700 bg-ink-850 p-3 text-slate-100">“{a.caption}”</p>}
-      {["queued", "pending", "running"].includes(a.status) && <p className="text-sm text-slate-400">Waiting for {a.provider === "qwen3vl_local" ? "the GPU worker" : "the provider"}… no output is shown until the model actually responds.</p>}
+      {["queued", "pending", "running"].includes(a.status) && <p className="text-sm text-slate-400">Waiting for {a.provider === "qwen3vl_local" ? "the inference worker" : "the provider"}… no output is shown until the model actually responds.</p>}
       {a.error && <Notice tone="error">{a.error}</Notice>}
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-        <KV items={[["Duration", fmtDuration(a.duration_s)], ["Created", fmtTime(a.created_at)]]} />
+        <KV items={[["Duration", fmtDuration(a.duration_s)], ["Created", fmtTime(a.created_at)],
+          ...(a.runtime_info?.device ? [["Device", `${String(a.runtime_info.device)} · ${String(a.runtime_info.dtype ?? "")}`] as [string, string]] : []),
+          ...(a.runtime_info?.generated_tokens !== undefined ? [["Tokens in/out", `${String(a.runtime_info.input_tokens)} / ${String(a.runtime_info.generated_tokens)}`] as [string, string]] : []),
+          ...((a.runtime_info?.memory as { peak_process_gb?: number } | undefined)?.peak_process_gb !== undefined ? [["Peak worker memory", `${(a.runtime_info!.memory as { peak_process_gb: number }).peak_process_gb} GB`] as [string, string]] : [])]} />
         {a.raw_output && <button className="btn-ghost px-2 py-1 text-xs" onClick={() => setRaw((v) => !v)}>Raw model output <ChevronDown className={`h-3.5 w-3.5 transition ${raw ? "rotate-180" : ""}`} /></button>}
       </div>
       {raw && a.raw_output && <pre className="mono mt-2 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg border border-ink-700 bg-ink-950 p-3 text-slate-300">{a.raw_output}</pre>}

@@ -15,7 +15,7 @@ import type { GenParams, Iteration, Reconstruction, RefinementSession } from "..
 export function RefinementPage() {
   return (
     <>
-      <PageHeader stage="Stage 5" title="Iterative refinement" description="Rule-based proposals compare the reference analysis with an analysis of the generated image. You approve or reject each proposal; the loop keeps the best iteration and stops early when the optimisation metric plateaus." />
+      <PageHeader stage="Stage 5" title="Iterative refinement" description="Rule-based proposals compare the reference analysis with an analysis of the generated image. You approve or reject each proposal; the loop builds on the best iteration and stops early when the optimisation metric plateaus. For reporting, the final iteration is used — the best one is selected after the fact and biased." />
       <WithReconstruction>{(r, reload) => <RefineBody r={r} reload={reload} />}</WithReconstruction>
     </>
   );
@@ -135,7 +135,7 @@ function SessionView({ r, s, reload }: { r: Reconstruction; s: RefinementSession
               </LineChart>
             </ResponsiveContainer>
           </div>
-        ) : <p className="py-6 text-center text-sm text-slate-500">Waiting for the baseline to be generated and scored by the GPU worker…</p>}
+        ) : <p className="py-6 text-center text-sm text-slate-500">Waiting for the baseline to be generated and scored by the inference worker…</p>}
       </Card>
 
       <div className="space-y-3">
@@ -170,6 +170,7 @@ function IterationCard({ it, best, imageUrl, onApprove, onReject }: {
           {best && <Pill tone="amber"><Trophy className="mr-1 h-3 w-3" />best</Pill>}
           <span className="ml-auto font-mono text-lg text-slate-100">{it.status === "scored" ? fmtNum(it.optimization_score) : "—"}</span>
         </div>
+        {!it.proposal?.baseline && edits.length > 0 && <p className="text-xs text-slate-500"><Pill tone="accent">rule-based suggestion</Pill> Derived from VLM analyses of the reference and the generated image. Not evidence of improvement until generated and independently evaluated.</p>}
         {it.proposal?.rationale && <p className="text-sm text-slate-400">{it.proposal.rationale}{it.proposal.base_iteration !== undefined && ` Based on iteration ${it.proposal.base_iteration}.`}</p>}
         {edits.length > 0 && (
           <ul className="space-y-1.5">

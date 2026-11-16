@@ -2,6 +2,7 @@ import { Route, Routes } from "react-router-dom";
 import { ActiveReconstructionProvider } from "./hooks/useActiveReconstruction";
 import { AppLayout } from "./layouts/AppLayout";
 import { AnalysisPage } from "./pages/AnalysisPage";
+import { ComparePage } from "./pages/ComparePage";
 import { EvaluationPage } from "./pages/EvaluationPage";
 import { ExperimentsPage } from "./pages/ExperimentsPage";
 import { FindingsPage } from "./pages/FindingsPage";
@@ -26,6 +27,7 @@ export default function App() {
           <Route path="/generation" element={<GenerationPage />} />
           <Route path="/evaluation" element={<EvaluationPage />} />
           <Route path="/refinement" element={<RefinementPage />} />
+          <Route path="/compare" element={<ComparePage />} />
           <Route path="/experiments" element={<ExperimentsPage />} />
           <Route path="/findings" element={<FindingsPage />} />
           <Route path="/methodology" element={<MethodologyPage />} />

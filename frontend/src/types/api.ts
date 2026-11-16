@@ -27,7 +27,7 @@ export interface Analysis {
   id: string; reconstruction_id: string; image_id: string; mode: "structured" | "caption";
   provider: string; model: string; status: Status; result: Attributes | null; caption: string | null;
   raw_output: string | null; error: string | null; duration_s: number | null; job_id: string | null;
-  is_manual: boolean; created_at: string;
+  is_manual: boolean; runtime_info?: Record<string, unknown> | null; created_at: string;
 }
 
 export interface Issue {
@@ -100,7 +100,7 @@ export interface Provider {
 export interface ModelSpec {
   key: string; hf_id: string; label: string; family: string; default_steps: number; default_cfg: number;
   default_size: number; steps_range: [number, number]; cfg_range: [number, number]; max_side: number;
-  notes: string; vram_note: string;
+  notes: string; vram_note: string; est_gb?: number; recommended_16gb?: boolean; downloaded?: boolean | null;
 }
 
 export interface MetricInfo {
@@ -108,12 +108,30 @@ export interface MetricInfo {
   description: string; available_in_api_process: boolean; api_process_reason: string; default_role: string;
 }
 
+export interface WorkerMemory {
+  process_gb?: number; process_metric?: string; system_total_gb?: number; system_available_gb?: number;
+  system_used_percent?: number; swap_used_gb?: number; mps_allocated_gb?: number; mps_driver_gb?: number;
+  cuda_allocated_gb?: number;
+}
+
+export interface WorkerCapabilities {
+  job_types?: string[];
+  runtime?: { torch?: string | null; selected_device?: string; gpu?: string; mps_available?: boolean;
+    cuda_available?: boolean; mps_recommended_max_gb?: number; mps_fallback_enabled?: boolean; vram_gb?: number };
+  memory?: WorkerMemory;
+  resident_models?: { key: string; category: string; est_gb: number | null; load_s: number; idle_s: number;
+    process_gb_after_load: number | null }[];
+  model_events?: { t: number; event: string; key: string; reason?: string; process_gb?: number }[];
+  packages?: Record<string, boolean>;
+}
+
 export interface WorkerInfo {
-  id: string; name: string; online: boolean; last_seen_at: string | null; capabilities: Record<string, unknown>;
+  id: string; name: string; online: boolean; last_seen_at: string | null; capabilities: WorkerCapabilities;
 }
 
 export interface SystemInfo {
   app: string; vlm_providers: Provider[]; local_vlm_models: Record<string, string>; generation_providers: Provider[];
+  local_vlm_cached?: Record<string, boolean | null>;
   models: ModelSpec[]; metrics: MetricInfo[]; templates: { id: string; description: string }[];
   jobs: Record<string, number>; workers: WorkerInfo[]; gpu_worker_online: boolean;
   worker_registration_enabled: boolean; code: { git_commit: string | null; git_dirty: boolean | null; source_sha256: string };
@@ -144,8 +162,8 @@ export interface PromptDiff {
 
 export interface Comparison {
   reconstruction: ReconstructionSummary;
-  conditions: { A_caption: Generation | null; B_structured: Generation | null; C_refined: Generation | null };
-  refinement: { session_id: string; best_iteration: number; optimization_metric: string;
+  conditions: { A_caption: Generation | null; D_detailed?: Generation | null; B_structured: Generation | null; C_refined: Generation | null };
+  refinement: { session_id: string; shown_iteration?: number; shown?: string; best_iteration: number | null; optimization_metric: string;
     history: { iteration: number; status: string; score: number | null }[] } | null;
 }
 
@@ -157,15 +175,50 @@ export interface DemoCondition {
   duration_s?: number | null; runtime_info?: Record<string, unknown> | null;
   metrics?: { metric: string; role: string; status: string; value: number | null; higher_is_better: boolean; backend: string }[];
   image?: string;
-  refinement?: { best_iteration: number; optimization_metric: string; history: { iteration: number; status: string; score: number | null }[] };
+  refinement?: { shown_iteration?: number; shown?: string; best_iteration: number | null; optimization_metric: string; history: { iteration: number; status: string; score: number | null }[] };
 }
 
 export interface DemoBundle {
   schema: string; name: string; reference_image: string; created_at: string; provenance: string;
-  code_fingerprint: Record<string, unknown>; conditions: Record<"A_caption" | "B_structured" | "C_refined", DemoCondition>;
+  code_fingerprint: Record<string, unknown>; conditions: Partial<Record<"A_caption" | "D_detailed" | "B_structured" | "C_refined", DemoCondition>>;
+}
+
+export interface Summary { n: number; mean: number; sd: number | null; min: number; max: number }
+
+export interface Aggregate {
+  groups: Record<string, { selection_biased: boolean; metrics: Record<string, Summary>; human_similarity: Summary | null;
+    other: Record<string, Summary> }>;
+  paired: { a: string; b: string; metric: string; higher_is_better: boolean; n_pairs: number; b_better: number;
+    b_worse: number; ties: number; mean_diff_b_minus_a: number; selection_biased: boolean }[];
+  metrics: Record<string, { label: string; higher_is_better: boolean }>;
+  condition_order: string[]; n_reconstructions: number; n_completed_generations: number; notes: string[];
+}
+
+export interface ComparisonRow {
+  generation_id: string; reconstruction_id: string; condition: string | null; groups: string[]; status: Status;
+  output_image_url: string | null;
+  created_at: string; prompt_version: number; prompt_source: string; template_id: string; prompt: string;
+  prompt_chars: number; prompt_words: number; prompt_clip_tokens_approx: number; model_key: string;
+  params: Record<string, number | null>; config_key: string; device: string | null; generation_s: number | null;
+  peak_memory_gb: number | null; refinement_session_id: string | null; refinement_iteration: number | null;
+  refinement_iterations_executed: number | null;
+  metrics: Record<string, { value: number | null; status: Status; higher_is_better: boolean }>;
+  optimization: { metric: string; value: number | null; status: Status }[];
+  human: { n: number; mean_similarity: number | null };
+}
+
+export interface ComparisonTable {
+  reconstruction_id: string; rows: ComparisonRow[]; config_groups: Record<string, string[]>;
+  metrics: Record<string, { label: string; higher_is_better: boolean }>; condition_order: string[]; selection_biased: string[];
+}
+
+export interface HumanRating {
+  id: string; generation_id: string; rater: string; similarity: number; subject_match: number | null;
+  style_match: number | null; blind: boolean; notes: string; kind: "human"; created_at: string;
 }
 
 export interface Stats {
+  comparison: Aggregate;
   by_metric_and_condition: Record<string, Record<string, { n: number; mean: number; min: number; max: number }>>;
   counts: { reconstructions: number; completed_metrics: number };
 }

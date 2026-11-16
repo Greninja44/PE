@@ -17,10 +17,12 @@ export function GenParamsForm({ models, value, onChange, showNegative = true }: 
     <div className="space-y-3">
       <Field label="Model" hint={spec ? `${spec.hf_id} · ${spec.vram_note}` : undefined}>
         <select className="input" value={value.model_key} onChange={(e) => onChange({ ...defaultParams(models.find((m) => m.key === e.target.value)), seed: value.seed, negative_prompt: value.negative_prompt })}>
-          {models.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
+          {models.map((m) => <option key={m.key} value={m.key}>{m.label}{m.downloaded === false ? " — not downloaded" : ""}{m.recommended_16gb === false ? " — not recommended on 16 GB" : ""}</option>)}
         </select>
       </Field>
       {spec?.notes && <p className="text-xs text-slate-400">{spec.notes}</p>}
+      {spec?.downloaded === false && <p className="text-xs text-amber-300">Weights are not in the local cache: the first run downloads them (~{spec.est_gb ?? "?"} GB) and will take a while. Prefer <span className="mono">scripts/download_models.py</span> beforehand.</p>}
+      {spec?.recommended_16gb === false && <p className="text-xs text-amber-300">This model needs ≈{spec.est_gb} GB for weights alone; on a 16 GB Mac it is likely to swap or fail. It has not been verified on this machine.</p>}
       <div className="grid grid-cols-2 gap-3">
         <Field label="Seed">
           <div className="flex gap-1.5">

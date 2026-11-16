@@ -9,8 +9,8 @@ import { CONDITION_LABEL, fmtDuration, fmtNum } from "../lib/format";
 import { api } from "../services/api";
 import type { Comparison, DemoBundle, GenParams } from "../types/api";
 
-type CondKey = "A_caption" | "B_structured" | "C_refined";
-const CONDS: CondKey[] = ["A_caption", "B_structured", "C_refined"];
+type CondKey = "A_caption" | "D_detailed" | "B_structured" | "C_refined";
+const CONDS: CondKey[] = ["A_caption", "D_detailed", "B_structured", "C_refined"];
 
 interface ViewCond {
   status: string; imageUrl?: string; prompt?: string; negative?: string; modelId?: string; provider?: string;
@@ -18,14 +18,14 @@ interface ViewCond {
   metrics: { label: string; metric: string; value: number | null; status: string; role: string; hib: boolean }[];
 }
 interface View { name: string; referenceUrl: string; source: string; conds: Record<CondKey, ViewCond>;
-  refinement?: { best_iteration: number; optimization_metric: string; history: { iteration: number; status: string; score: number | null }[] } | null }
+  refinement?: { shown_iteration?: number; shown?: string; best_iteration: number | null; optimization_metric: string; history: { iteration: number; status: string; score: number | null }[] } | null }
 
 const METRIC_LABEL: Record<string, string> = { clip_l14: "CLIP L/14", clip_b32: "CLIP B/32", dinov2_base: "DINOv2", ssim: "SSIM", lpips_alex: "LPIPS" };
 
 function fromLive(c: Comparison): View {
   const conds = {} as Record<CondKey, ViewCond>;
   for (const k of CONDS) {
-    const g = c.conditions[k];
+    const g = c.conditions[k] ?? null;
     conds[k] = g ? {
       status: g.status, imageUrl: g.output_image?.url, prompt: g.positive, negative: g.params.negative_prompt, modelId: g.model_id,
       provider: g.provider, params: g.params, duration: g.duration_s, promptVersion: g.prompt_version,
@@ -126,7 +126,7 @@ function buildSlides(view: View | null): React.ReactNode[] {
           </div>
         ))}
       </div>
-      <p className="mt-8 text-xl text-slate-400">Conditions compared at identical model, seed and parameters: <b className="text-slate-200">A</b> caption only · <b className="text-slate-200">B</b> structured prompt · <b className="text-slate-200">C</b> structured + refinement.</p>
+      <p className="mt-8 text-xl text-slate-400">Conditions compared at identical model, seed and parameters: <b className="text-slate-200">A</b> caption only · <b className="text-slate-200">D</b> detailed prose prompt · <b className="text-slate-200">B</b> structured prompt · <b className="text-slate-200">C</b> structured + refinement (final iteration).</p>
     </div>
   );
   if (!view) return [intro, pipeline, <div key="none" className="text-center text-2xl text-slate-400">Choose a demo bundle or reconstruction (top right) to show results.</div>];
@@ -139,8 +139,8 @@ function buildSlides(view: View | null): React.ReactNode[] {
   );
   const compare = (
     <div className="w-full max-w-[1600px]">
-      <Title kicker="Results">Original vs. three reconstructions</Title>
-      <div className="grid grid-cols-4 gap-5">
+      <Title kicker="Results">Original vs. the reconstructions</Title>
+      <div className="grid grid-cols-5 gap-5">
         <figure><div className="aspect-square overflow-hidden rounded-xl border-2 border-slate-400/60 bg-ink-900"><img src={view.referenceUrl} alt="" className="h-full w-full object-contain" /></div><figcaption className="mt-3 text-xl font-semibold">Original</figcaption></figure>
         {CONDS.map((k) => {
           const c = view.conds[k];
@@ -160,7 +160,7 @@ function buildSlides(view: View | null): React.ReactNode[] {
   const prompts = (
     <div className="w-full max-w-[1600px]">
       <Title kicker="Actual prompts & configuration">What each condition sent to the model</Title>
-      <div className="grid grid-cols-3 gap-5">
+      <div className="grid grid-cols-4 gap-5">
         {CONDS.map((k) => {
           const c = view.conds[k];
           return (
@@ -201,7 +201,8 @@ function buildSlides(view: View | null): React.ReactNode[] {
         </tbody>
       </table>
       {view.refinement && (
-        <p className="mt-8 text-lg text-slate-400">C = best of {view.refinement.history.filter((h) => h.iteration > 0 && h.status === "scored").length} refinement iteration(s) (iteration {view.refinement.best_iteration}), selected by <span className="font-mono">{view.refinement.optimization_metric}</span> — which is excluded from the table above.</p>
+        <p className="mt-8 text-lg text-slate-400">C = the <b className="text-slate-200">final</b> scored refinement iteration{view.refinement.shown_iteration !== undefined ? ` (iteration ${view.refinement.shown_iteration})` : ""} of {view.refinement.history.filter((h) => h.iteration > 0 && h.status === "scored").length}. The loop optimised <span className="font-mono">{view.refinement.optimization_metric}</span>, which is excluded from the table above.
+          {view.refinement.best_iteration !== null && view.refinement.best_iteration !== view.refinement.shown_iteration && <> Its best-scoring iteration ({view.refinement.best_iteration}) is not shown here: picking the best after the fact would overstate refinement (selection bias).</>}</p>
       )}
     </div>
   );
@@ -213,6 +214,7 @@ function buildSlides(view: View | null): React.ReactNode[] {
         <li>Stages that did not run are labelled — nothing is simulated or filled in.</li>
         <li>Refinement optimises one metric; we judge it with <i>different</i> metrics.</li>
         <li>One image is an illustration, not evidence — see Research Findings for n.</li>
+        <li>An earlier 12-image pilot (researcher-reported) found structured prompts did <i>not</i> consistently beat plain captions, and its refinement gains may reflect selection bias.</li>
       </ul>
     </div>
   );

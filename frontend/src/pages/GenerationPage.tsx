@@ -13,7 +13,7 @@ import type { GenParams, Generation, Reconstruction } from "../types/api";
 export function GenerationPage() {
   return (
     <>
-      <PageHeader stage="Stage 3" title="Image generation" description="Generate from any prompt version with explicit, recorded parameters. Local diffusers jobs on the GPU worker are fully seeded; hosted providers are flagged as not reproducible." />
+      <PageHeader stage="Stage 3" title="Image generation" description="Generate from any prompt version with explicit, recorded parameters. Local diffusers jobs on the inference worker are fully seeded; hosted providers are flagged as not reproducible." />
       <WithReconstruction>{(r, reload) => <GenBody r={r} reload={reload} />}</WithReconstruction>
     </>
   );
@@ -28,9 +28,23 @@ function GenBody({ r, reload }: { r: Reconstruction; reload: () => Promise<void>
   const [condition, setCondition] = useState("");
   const [error, setError] = useState<string | null>(null);
   const captions = r.prompt_versions.filter((p) => p.source === "caption");
-  const structured = r.prompt_versions.filter((p) => p.source !== "caption");
+  const detailed = r.prompt_versions.filter((p) => p.source !== "caption" && p.template_id === "natural_v1");
+  const structured = r.prompt_versions.filter((p) => p.source !== "caption" && p.template_id !== "natural_v1");
   const [capId, setCapId] = useState(captions.at(-1)?.id ?? "");
+  const [detId, setDetId] = useState(detailed.at(-1)?.id ?? "");
   const [strId, setStrId] = useState(structured.filter((p) => p.source === "validated").at(-1)?.id ?? structured.at(-1)?.id ?? "");
+  useEffect(() => { if (!detId && detailed.length) setDetId(detailed.at(-1)!.id); }, [detailed, detId]);
+  useEffect(() => { if (!capId && captions.length) setCapId(captions.at(-1)!.id); }, [captions, capId]);
+  const latestStructured = [...r.analyses].reverse().find((a) => a.mode === "structured" && a.status === "completed" && a.image_id === r.image.id);
+  const makeDetailed = async () => {
+    if (!latestStructured) return;
+    setError(null);
+    try {
+      const pvs = await api.promptsFromAnalysis(r.id, latestStructured.id, "natural_v1");
+      setDetId(pvs.at(-1)!.id);
+      await reload();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  };
 
   useEffect(() => { if (models.length && !models.find((m) => m.key === params.model_key)) setParams(defaultParams(models[0])); }, [models, params.model_key]);
   useEffect(() => { if (!pvId && r.prompt_versions.length) setPvId(r.prompt_versions.at(-1)!.id); }, [r.prompt_versions, pvId]);
@@ -43,7 +57,7 @@ function GenBody({ r, reload }: { r: Reconstruction; reload: () => Promise<void>
   const compare = async () => {
     setError(null);
     try {
-      await api.startComparison(r.id, { caption_prompt_version_id: capId || undefined, structured_prompt_version_id: strId || undefined, provider, params: { ...params, negative_prompt: "" } });
+      await api.startComparison(r.id, { caption_prompt_version_id: capId || undefined, detailed_prompt_version_id: detId || undefined, structured_prompt_version_id: strId || undefined, provider, params: { ...params, negative_prompt: "" } });
       await reload();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   };
@@ -83,12 +97,20 @@ function GenBody({ r, reload }: { r: Reconstruction; reload: () => Promise<void>
                 <button className="btn-primary w-full" disabled={!pvId || !prov?.available} onClick={run}><Play className="h-4 w-4" />Generate</button>
               </div>
             </Card>
-            <Card title="Controlled comparison (A vs B)" subtitle="Same model, seed, steps, CFG and resolution — only the prompt differs.">
+            <Card title="Controlled comparison (A · D · B)" subtitle="Same model, seed, steps, CFG and resolution — only the prompt differs.">
               <div className="space-y-3">
                 <Field label="A · Caption prompt">
                   <select className="input" value={capId} onChange={(e) => setCapId(e.target.value)}>
                     <option value="">— none —</option>{captions.map((p) => <option key={p.id} value={p.id}>{versionLabel(p)}</option>)}
                   </select>
+                </Field>
+                <Field label="D · Detailed prose prompt" hint="natural_v1 template over the same structured analysis">
+                  <div className="flex gap-1.5">
+                    <select className="input" value={detId} onChange={(e) => setDetId(e.target.value)}>
+                      <option value="">— none —</option>{detailed.map((p) => <option key={p.id} value={p.id}>{versionLabel(p)}</option>)}
+                    </select>
+                    {latestStructured && <button className="btn-secondary shrink-0 px-2.5 text-xs" onClick={makeDetailed} title="Build a detailed prose prompt (natural_v1) from the latest structured analysis">Create</button>}
+                  </div>
                 </Field>
                 <Field label="B · Structured prompt">
                   <select className="input" value={strId} onChange={(e) => setStrId(e.target.value)}>
@@ -96,13 +118,13 @@ function GenBody({ r, reload }: { r: Reconstruction; reload: () => Promise<void>
                   </select>
                 </Field>
                 <p className="text-xs text-slate-400">Condition C is produced by a refinement session started from B (Stage 5).</p>
-                <button className="btn-secondary w-full" disabled={(!capId && !strId) || !prov?.available} onClick={compare}><Columns3 className="h-4 w-4" />Run A/B with identical parameters</button>
+                <button className="btn-secondary w-full" disabled={(!capId && !strId && !detId) || !prov?.available} onClick={compare}><Columns3 className="h-4 w-4" />Run selected conditions with identical parameters</button>
               </div>
             </Card>
           </>
         )}
         <ErrorText error={error} />
-        {prov?.execution === "worker" && !sys.data?.gpu_worker_online && <Notice tone="warn">No GPU worker online. Jobs will be queued and executed when your RTX worker connects.</Notice>}
+        {prov?.execution === "worker" && !sys.data?.gpu_worker_online && <Notice tone="warn">No inference worker online. Jobs will be queued and executed when a worker connects (scripts/dev.sh starts one on this Mac).</Notice>}
       </div>
 
       <div className="grid content-start gap-4 md:grid-cols-2 2xl:grid-cols-3">
@@ -117,13 +139,16 @@ export function GenerationCard({ g }: { g: Generation }) {
   return (
     <div className="card overflow-hidden">
       <ImageFrame className="rounded-none border-0" src={g.output_image?.url}
-        placeholder={g.status === "failed" ? "Generation failed" : g.provider === "gpu_worker" ? `${g.status} — awaiting GPU worker` : g.status}
+        placeholder={g.status === "failed" ? "Generation failed" : g.provider === "gpu_worker" ? `${g.status} — awaiting worker` : g.status}
         label={<span className="flex items-center gap-2">v{g.prompt_version} · {g.model_key}<StatusBadge status={g.status} /></span>}
         sub={g.condition ? <Pill tone="accent">{CONDITION_LABEL[g.condition]}</Pill> : undefined} />
       <div className="space-y-2 p-3 text-xs">
         <p className="mono line-clamp-3 text-slate-300" title={g.positive}>{g.positive}</p>
         <KV items={[["seed", <span className="font-mono">{g.params.seed}</span>], ["steps / cfg", <span className="font-mono">{g.params.steps} / {g.params.cfg_scale}</span>],
-          ["size", <span className="font-mono">{g.params.width}×{g.params.height}</span>], ["provider", g.provider], ["time", fmtDuration(g.duration_s)], ["created", fmtTime(g.created_at)]]} />
+          ["size", <span className="font-mono">{g.params.width}×{g.params.height}</span>], ["provider", g.provider], ["time", fmtDuration(g.duration_s)],
+          ...(g.runtime_info?.device ? [["device", `${String(g.runtime_info.device)} · ${String(g.runtime_info.dtype ?? "")}`] as [string, string]] : []),
+          ...((g.runtime_info?.memory as { peak_process_gb?: number } | undefined)?.peak_process_gb !== undefined ? [["peak memory", `${(g.runtime_info!.memory as { peak_process_gb: number }).peak_process_gb} GB`] as [string, string]] : []),
+          ["created", fmtTime(g.created_at)]]} />
         {g.runtime_info && g.runtime_info.reproducible === false && <Pill tone="amber">remote · not reproducible</Pill>}
         {g.error && <p className="text-rose-300">{g.error}</p>}
       </div>
