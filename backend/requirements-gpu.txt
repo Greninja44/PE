@@ -1,0 +1,12 @@
+# GPU worker extras — install ONLY on the RTX 5060 machine.
+# RTX 50-series (Blackwell, sm_120) needs PyTorch >= 2.7 built against CUDA 12.8+.
+# Install torch first from the CUDA index, e.g.:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# then:  pip install -r requirements-gpu.txt
+-r requirements.txt
+diffusers>=0.32
+transformers>=4.57      # Qwen3-VL support
+accelerate>=1.0
+safetensors>=0.4
+lpips>=0.1.4
+qwen-vl-utils>=0.0.10

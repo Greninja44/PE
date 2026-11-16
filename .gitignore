@@ -1,0 +1,64 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Secrets / API keys ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+worker_token*.txt
+secrets/
+
+# --- Model weights & caches (never commit) ---
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.onnx
+*.gguf
+models/
+hf_cache/
+.cache/
+huggingface/
+
+# --- Node / frontend ---
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# --- Runtime data ---
+backend/data/
+*.db
+*.db-journal
+*.sqlite3
+logs/
+*.log
+tmp/
+*.tmp
+
+# --- Experiment media (large binaries). Metadata, prompts, metrics, reports ARE tracked. ---
+experiments/originals/*
+!experiments/originals/.gitkeep
+experiments/generated/*
+!experiments/generated/.gitkeep
+experiments/bundles/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
