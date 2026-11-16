@@ -9,4 +9,3 @@ transformers>=4.57      # Qwen3-VL support
 accelerate>=1.0
 safetensors>=0.4
 lpips>=0.1.4
-qwen-vl-utils>=0.0.10

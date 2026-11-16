@@ -117,6 +117,7 @@ export function GenerationCard({ g }: { g: Generation }) {
   return (
     <div className="card overflow-hidden">
       <ImageFrame className="rounded-none border-0" src={g.output_image?.url}
+        placeholder={g.status === "failed" ? "Generation failed" : g.provider === "gpu_worker" ? `${g.status} — awaiting GPU worker` : g.status}
         label={<span className="flex items-center gap-2">v{g.prompt_version} · {g.model_key}<StatusBadge status={g.status} /></span>}
         sub={g.condition ? <Pill tone="accent">{CONDITION_LABEL[g.condition]}</Pill> : undefined} />
       <div className="space-y-2 p-3 text-xs">

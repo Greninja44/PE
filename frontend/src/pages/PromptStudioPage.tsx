@@ -27,13 +27,15 @@ function Studio({ r, reload }: { r: Reconstruction; reload: () => Promise<void> 
   const [selectedId, setSelectedId] = useState<string | null>(versions.at(-1)?.id ?? null);
   const selected = versions.find((v) => v.id === selectedId) ?? versions.at(-1) ?? null;
   const completed = r.analyses.filter((a) => a.status === "completed" && a.image_id === r.image.id);
-  const [analysisId, setAnalysisId] = useState(completed.at(-1)?.id ?? "");
+  const preferred = () => (completed.filter((a) => a.mode === "structured").at(-1) ?? completed.at(-1))?.id ?? "";
+  const [analysisId, setAnalysisId] = useState(preferred);
   const [template, setTemplate] = useState("structured_v1");
   const [error, setError] = useState<string | null>(null);
   const [diffA, setDiffA] = useState("");
   const [diffB, setDiffB] = useState("");
 
-  useEffect(() => { if (!analysisId && completed.length) setAnalysisId(completed.at(-1)!.id); }, [completed, analysisId]);
+  useEffect(() => { if (!analysisId && completed.length) setAnalysisId(preferred()); }, [completed, analysisId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const selectedAnalysis = completed.find((a) => a.id === analysisId);
 
   const build = async () => {
     setError(null);
@@ -55,14 +57,14 @@ function Studio({ r, reload }: { r: Reconstruction; reload: () => Promise<void> 
                   {completed.map((a) => <option key={a.id} value={a.id}>{a.mode} · {a.provider} · {fmtTime(a.created_at)}</option>)}
                 </select>
               </Field>
-              {completed.find((a) => a.id === analysisId)?.mode === "structured" && (
+              {selectedAnalysis?.mode === "structured" && (
                 <Field label="Template">
                   <select className="input" value={template} onChange={(e) => setTemplate(e.target.value)}>
                     {sys.data?.templates.filter((t) => t.id !== "caption_v1").map((t) => <option key={t.id} value={t.id}>{t.id}</option>)}
                   </select>
                 </Field>
               )}
-              <p className="text-xs text-slate-400">{sys.data?.templates.find((t) => t.id === template)?.description}</p>
+              <p className="text-xs text-slate-400">{selectedAnalysis?.mode === "caption" ? "Caption → caption_v1 baseline (condition A), used verbatim." : sys.data?.templates.find((t) => t.id === template)?.description}</p>
               <ErrorText error={error} />
               <button className="btn-primary w-full" onClick={build} disabled={!analysisId}><Wand2 className="h-4 w-4" />Generate prompt versions</button>
             </div>

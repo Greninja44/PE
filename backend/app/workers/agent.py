@@ -203,6 +203,7 @@ def doctor() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # do not log every 3-second poll
     ap = argparse.ArgumentParser(prog="python -m app.workers.agent")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("doctor", help="check torch/CUDA/GPU")

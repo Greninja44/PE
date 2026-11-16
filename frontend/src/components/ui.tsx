@@ -169,12 +169,12 @@ export function IssueList({ issues }: { issues: Issue[] }) {
   );
 }
 
-export function ImageFrame({ src, label, sub, className }: { src?: string | null; label?: ReactNode; sub?: ReactNode; className?: string }) {
+export function ImageFrame({ src, label, sub, className, placeholder = "Not generated" }: { src?: string | null; label?: ReactNode; sub?: ReactNode; className?: string; placeholder?: string }) {
   return (
     <figure className={clsx("overflow-hidden rounded-xl border border-ink-700 bg-ink-850", className)}>
       <div className="flex aspect-square items-center justify-center bg-[repeating-conic-gradient(#0f1622_0_25%,#121a28_0_50%)] bg-[length:20px_20px]">
         {src ? <img src={src} alt={typeof label === "string" ? label : ""} className="h-full w-full object-contain" />
-          : <span className="px-4 text-center text-sm text-slate-500">Not generated</span>}
+          : <span className="px-4 text-center text-sm text-slate-500">{placeholder}</span>}
       </div>
       {(label || sub) && (
         <figcaption className="border-t border-ink-700 px-3 py-2">
