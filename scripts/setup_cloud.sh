@@ -12,7 +12,8 @@ else
   .venv/bin/pip install --upgrade pip
   .venv/bin/pip install -r requirements-dev.txt
 fi
-[ -f .env ] || { cp .env.example .env; sed -i "s|^PE_ADMIN_TOKEN=.*|PE_ADMIN_TOKEN=$(.venv/bin/python -c 'import secrets;print(secrets.token_urlsafe(32))')|" .env; sed -i "s|^PE_DATABASE_URL=.*|PE_DATABASE_URL=sqlite:///./data/pe.db|" .env; echo "created backend/.env with a fresh admin token"; }
+# sed -i.bak works with both GNU and BSD (macOS) sed.
+[ -f .env ] || { cp .env.example .env; sed -i.bak "s|^PE_ADMIN_TOKEN=.*|PE_ADMIN_TOKEN=$(.venv/bin/python -c 'import secrets;print(secrets.token_urlsafe(32))')|" .env; sed -i.bak "s|^PE_DATABASE_URL=.*|PE_DATABASE_URL=sqlite:///./data/pe.db|" .env; rm -f .env.bak; echo "created backend/.env with a fresh admin token"; }
 cd "$ROOT/frontend"
 npm ci --no-audit --no-fund
 echo "Setup complete. Run: scripts/dev.sh"
