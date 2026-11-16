@@ -15,17 +15,21 @@ flowchart LR
     P --> IN[inline providers<br/>OpenAI-compatible · HF]
     RC[refinement controller] --> P
   end
-  subgraph GPU["GPU worker (RTX 5060)"]
-    A[agent: poll / claim / heartbeat] --> H[fixed handlers]
-    H --> QV[Qwen3-VL runner]
-    H --> DF[diffusers runner]
-    H --> TM[CLIP · DINOv2 · LPIPS]
+  subgraph GPU["Inference worker — local Mac (MPS) or NVIDIA machine (CUDA)"]
+    A[agent: poll / claim / heartbeat<br/>live memory + resident models] --> H[fixed handlers]
+    H --> MM[runtime.ModelManager<br/>one family resident · idle unload]
+    MM --> QV[Qwen3-VL runner]
+    MM --> DF[diffusers runner]
+    MM --> TM[CLIP · DINOv2 · LPIPS]
+    DV[runtime.device<br/>CUDA → MPS → CPU] -.-> MM
   end
   UI -- /api --> R
   A -- "HTTPS + bearer token" --> R
 ```
 
-The API process never imports torch. Everything that needs a GPU becomes a **job**.
+The API process never imports torch. Everything that needs a model becomes a **job**. On Apple Silicon the worker
+runs on the same machine (`python -m app.workers.agent local`, started by `scripts/dev.sh`), which keeps model memory
+in a process that can be restarted independently of the API.
 
 ## Data model
 
@@ -33,12 +37,13 @@ The API process never imports torch. Everything that needs a GPU becomes a **job
 |---|---|
 | `images` | Content-addressed (SHA-256) originals and generated outputs; files live under `experiments/` |
 | `reconstructions` | One reference image under study; optionally linked to an `experiment` |
-| `analyses` | Stage 1 output (`structured` JSON or `caption`), provider, model, raw output, status, error |
+| `analyses` | Stage 1 output (`structured` JSON or `caption`), provider, model, raw output, status, error, runtime info |
 | `prompt_versions` | Immutable, numbered versions with `parent_id` lineage and `source` (caption / structured / validated / edited / manual / refinement) |
 | `generation_runs` | Stage 3 run: prompt version, model, full params incl. seed, condition label (A/B/C), runtime info, output image |
 | `metric_results` | One row per metric per generation; `role` = optimization / evaluation; `value` NULL unless completed |
 | `refinement_sessions` / `refinement_iterations` | Loop configuration, best iteration, stop reason; per-iteration proposal, decision, score |
 | `experiments` | Name, hypothesis, config, code fingerprint at creation |
+| `human_ratings` | Human 1–5 similarity (+ optional subject/style), rater, blind flag, notes — separate from `metric_results` |
 | `jobs` / `workers` | Queue with leases; workers authenticate with hashed bearer tokens |
 
 ## Execution model
@@ -57,7 +62,7 @@ rows so the UI never shows a stale "queued".
 
 ```mermaid
 sequenceDiagram
-  participant W as GPU worker
+  participant W as Inference worker
   participant B as Backend
   W->>B: POST /api/worker/heartbeat (capabilities)
   loop poll
@@ -84,8 +89,15 @@ sequenceDiagram
   allow-list, `trust_remote_code=False`, no payload field is ever used as a shell command, path or URL. Worker tokens
   are stored as SHA-256 hashes; registration requires `PE_ADMIN_TOKEN`. Uploaded results are re-validated (image
   decodes, size matches the requested resolution, completed metrics carry values).
-* **VRAM.** The worker keeps at most one heavy model family resident (VLM *or* diffusion *or* metric models) so it
-  fits in 8 GB; SDXL uses model CPU offload automatically below 12 GB.
+* **Memory.** The worker keeps at most one heavy model family resident (VLM *or* diffusion *or* metric models) so it
+  fits in 16 GB unified memory (Apple Silicon) or 8 GB VRAM; idle models are unloaded after `PE_WORKER_IDLE_UNLOAD_S`;
+  each unload releases the MPS/CUDA allocator cache. A pre-load check compares free memory with the model's
+  documented size (warn by default, refuse with `PE_STRICT_MEMORY_CHECK`). SDXL uses model CPU offload on CUDA
+  below 12 GB. Each job records the measured peak worker footprint.
+* **Devices.** `runtime.device` selects CUDA → MPS → CPU (`PE_DEVICE` to force), sets
+  `PYTORCH_ENABLE_MPS_FALLBACK=1` before torch is imported, and fixes precision per family (VLM bf16, diffusion
+  fp16, metrics fp32; CPU fp32 except bf16 VLM). Metrics that raise on MPS are recomputed on CPU and the fallback is
+  recorded in the metric's detail.
 
 ## Prompt engine
 
@@ -113,6 +125,14 @@ sequenceDiagram
 * `policy.decide()` tracks the best score (respecting `higher_is_better`), stops early after `patience` iterations
   without an improvement > `min_delta`, or at `max_iterations`. Failed iterations count toward the budget.
 
+## Comparison and reporting
+
+`experiments/comparison.py` builds (a) a per-reference table of **every** generation — condition, refinement view,
+prompt length, settings key, device, time, peak memory, evaluation metrics and human-rating summary — and (b) an
+aggregate over all (or one experiment's) references: per-group mean/SD/n, and paired win/loss/tie counts restricted
+to identical settings. Refinement views overlap and are labelled; `C_refined_best` carries `selection_biased: true`.
+Presentation Mode and demo bundles show the *final* refinement iteration for condition C.
+
 ## Experiment tracking
 
 * `code_fingerprint()` — git commit, dirty flag, SHA-256 over `backend/app/**/*.py`, Python and package versions.
@@ -126,10 +146,13 @@ sequenceDiagram
 
 ## Testing
 
-`backend/tests/` (44 tests): prompt engine rules, SSIM properties and closed-form check, parsing of VLM output,
+`backend/tests/` (66 tests; inference mocked): prompt engine rules, SSIM properties and closed-form check, parsing of VLM output,
 OpenAI-compatible request shape, the full API flow with a simulated worker (auth, image scoping, wrong-size upload
 rejection, retries, lease-expiry resume, cancellation), refinement approve/reject/early-stop, experiment export and
-write-once reports, and the real worker agent code against the API with a stub handler. SSIM was additionally
+write-once reports, the real worker agent code against the API with a stub handler, device selection and
+fallbacks, model lifecycle (sequential loading, idle unload, memory refusal), mocked handlers, NaN/black-image
+rejection, the A/D/B comparison with paired statistics, refinement views (iteration 0 / final / best), human ratings
+and the additive SQLite migration. Real-model checks are in `scripts/verify_inference.py`. SSIM was additionally
 cross-checked against scikit-image (difference ≤ 1e-16). Synthetic gradient images and hand-picked scores are used
 only inside tests.
 
