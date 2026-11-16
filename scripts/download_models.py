@@ -42,6 +42,13 @@ def main() -> int:
         for k, (repo, _, size, default) in MODELS.items():
             print(f"{k:12s} {repo:48s} {size:40s} {'default' if default else 'optional'}")
         return 0
+    import os
+    from pathlib import Path
+
+    # Fail fast on stalled connections (the default waits a long time on a hung TLS handshake); the outer retry
+    # resumes partial files. Must be set before huggingface_hub is imported.
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "20")
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
     from huggingface_hub import snapshot_download
 
     keys = a.only or [k for k, v in MODELS.items() if v[3]]
@@ -51,9 +58,16 @@ def main() -> int:
         return 2
     for k in keys:
         repo, patterns, size, _ = MODELS[k]
+        # Already complete locally? Skip without any network request.
+        try:
+            local = snapshot_download(repo, allow_patterns=patterns, local_files_only=True)
+            if any(w for ext in ("*.safetensors", "*.bin") for w in Path(local).rglob(ext)):
+                print(f"✓ {k}: already downloaded", flush=True)
+                continue
+        except Exception:  # noqa: BLE001 — not (fully) cached yet
+            pass
         print(f"→ {k}: {repo} ({size})", flush=True)
         path = snapshot_download(repo, allow_patterns=patterns)
-        from pathlib import Path
 
         weights = [w for ext in ("*.safetensors", "*.bin") for w in Path(path).rglob(ext)]
         if not weights:  # configs alone are not a usable model — never report success without weights
