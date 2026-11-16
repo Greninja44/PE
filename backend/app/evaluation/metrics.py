@@ -89,6 +89,53 @@ class Metric(abc.ABC):
     @abc.abstractmethod
     def compute(self, reference: PILImage.Image, generated: PILImage.Image) -> float: ...
 
+    #: device the last value was actually computed on (``None`` for pure-NumPy metrics)
+    last_device: str | None = None
+    #: why a CPU fallback happened, if it did
+    fallback_reason: str | None = None
+
+
+class _TorchMetric(Metric):
+    """Shared device handling for torch metrics: run on the selected device (MPS/CUDA/CPU) and, if the
+    accelerator raises (e.g. an operator without an MPS kernel), recompute the *same* metric on the CPU and
+    record the fallback. The value is always a genuine computation; it is never substituted."""
+
+    def __init__(self, device: str | None = None) -> None:
+        self._requested = device
+        self._device: str | None = None
+
+    def _resolve_device(self) -> str:
+        if self._device is None:
+            from app.runtime.device import select_device
+
+            self._device = select_device(self._requested).device
+        return self._device
+
+    def _move_to_cpu(self) -> None:  # pragma: no cover - overridden
+        raise NotImplementedError
+
+    def _score(self, reference: PILImage.Image, generated: PILImage.Image) -> float:  # pragma: no cover
+        raise NotImplementedError
+
+    def compute(self, reference: PILImage.Image, generated: PILImage.Image) -> float:
+        dev = self._resolve_device()
+        try:
+            value = self._score(reference, generated)
+        except (RuntimeError, NotImplementedError) as e:
+            if dev == "cpu":
+                raise
+            from app.runtime.device import empty_cache
+
+            self.fallback_reason = f"{type(e).__name__} on {dev}: {str(e)[:200]}"
+            self._device = "cpu"
+            self._move_to_cpu()
+            empty_cache(dev)
+            value = self._score(reference, generated)
+        if value != value:  # NaN — never report it as a score
+            raise ValueError(f"{self.key} produced NaN on {self._device}")
+        self.last_device = self._device
+        return value
+
 
 def _gaussian_kernel(size: int = 11, sigma: float = 1.5) -> np.ndarray:
     x = np.arange(size) - (size - 1) / 2
@@ -138,13 +185,13 @@ def _torch_metric_availability(*modules: str) -> Availability:
     return Availability(available=True, reason="torch backend present")
 
 
-class _EmbeddingCosine(Metric):
+class _EmbeddingCosine(_TorchMetric):
     model_id: str
 
     def __init__(self, device: str | None = None) -> None:
+        super().__init__(device)
         self._model = None
         self._processor = None
-        self._device = device
 
     def availability(self) -> Availability:
         return _torch_metric_availability("torch", "transformers")
@@ -155,16 +202,22 @@ class _EmbeddingCosine(Metric):
     def _embed(self, img: PILImage.Image):  # noqa: ANN202
         raise NotImplementedError
 
-    def compute(self, reference: PILImage.Image, generated: PILImage.Image) -> float:
+    def _score(self, reference: PILImage.Image, generated: PILImage.Image) -> float:
         import torch
 
         if self._model is None:
-            self._device = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
             self._load()
         with torch.inference_mode():
             a = self._embed(reference.convert("RGB"))
             b = self._embed(generated.convert("RGB"))
             return float(torch.nn.functional.cosine_similarity(a, b).item())
+
+    def _move_to_cpu(self) -> None:
+        self._model = self._model.to("cpu") if self._model is not None else None
+
+    def unload(self) -> None:
+        self._model = None
+        self._processor = None
 
 
 class CLIPMetric(_EmbeddingCosine):
@@ -181,7 +234,11 @@ class CLIPMetric(_EmbeddingCosine):
 
     def _embed(self, img: PILImage.Image):  # noqa: ANN202
         inputs = self._processor(images=img, return_tensors="pt").to(self._device)
-        return self._model.get_image_features(**inputs).float()
+        out = self._model.get_image_features(**inputs)
+        # transformers < 5 returns the projected embedding tensor; >= 5 returns BaseModelOutputWithPooling whose
+        # pooler_output holds the same projected embedding. Same quantity either way.
+        emb = out if hasattr(out, "float") and not hasattr(out, "pooler_output") else out.pooler_output
+        return emb.float()
 
 
 class DINOv2Metric(_EmbeddingCosine):
@@ -199,23 +256,28 @@ class DINOv2Metric(_EmbeddingCosine):
         return self._model(**inputs).last_hidden_state[:, 0].float()  # CLS token
 
 
-class LPIPSMetric(Metric):
+class LPIPSMetric(_TorchMetric):
     key = "lpips_alex"
 
     def __init__(self, device: str | None = None) -> None:
+        super().__init__(device)
         self._net = None
-        self._device = device
 
     def availability(self) -> Availability:
         return _torch_metric_availability("torch", "lpips")
 
-    def compute(self, reference: PILImage.Image, generated: PILImage.Image) -> float:
+    def _move_to_cpu(self) -> None:
+        self._net = self._net.to("cpu") if self._net is not None else None
+
+    def unload(self) -> None:
+        self._net = None
+
+    def _score(self, reference: PILImage.Image, generated: PILImage.Image) -> float:
         import lpips
         import torch
 
         if self._net is None:
-            self._device = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
-            self._net = lpips.LPIPS(net="alex", verbose=False).to(self._device).eval()
+            self._net = lpips.LPIPS(net="alex", verbose=False).to(self._resolve_device()).eval()
         r, g = align_pair(reference, generated)
 
         def to_t(im: PILImage.Image):  # noqa: ANN202

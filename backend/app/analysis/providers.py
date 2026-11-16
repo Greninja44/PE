@@ -31,9 +31,12 @@ from app.config.settings import get_settings
 # Models the GPU worker is permitted to load. Job payloads naming anything else are rejected.
 ALLOWED_LOCAL_VLMS: dict[str, str] = {
     "Qwen/Qwen3-VL-2B-Instruct": "Qwen3-VL 2B Instruct (default, ~4.5 GB bf16)",
-    "Qwen/Qwen3-VL-4B-Instruct": "Qwen3-VL 4B Instruct (~9 GB bf16; needs CPU offload on 8 GB)",
+    "Qwen/Qwen3-VL-4B-Instruct": "Qwen3-VL 4B Instruct (~9 GB bf16; needs CPU offload on 8 GB; tight on 16 GB Macs)",
     "Qwen/Qwen2.5-VL-3B-Instruct": "Qwen2.5-VL 3B Instruct",
 }
+# Approximate resident size of the weights in bf16, used for the pre-load memory check (not a measurement).
+VLM_EST_GB: dict[str, float] = {"Qwen/Qwen3-VL-2B-Instruct": 4.5, "Qwen/Qwen3-VL-4B-Instruct": 9.0,
+                                "Qwen/Qwen2.5-VL-3B-Instruct": 7.5}
 
 
 def _parse(provider: str, model: str, mode: AnalysisMode, text: str, t0: float,
@@ -75,44 +78,74 @@ class Qwen3VLLocalProvider(VLMProvider):
 class QwenVLRunner:
     """The actual local inference, imported and used only inside the GPU worker process."""
 
-    def __init__(self, model_id: str, device_map: str = "auto") -> None:
+    def __init__(self, model_id: str, device: str | None = None, max_image_side: int | None = None) -> None:
         if model_id not in ALLOWED_LOCAL_VLMS:
             raise ValueError(f"Model '{model_id}' is not in the local VLM allow-list")
         import torch
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
+        from app.runtime.device import dtype_for, select_device
+
+        s = get_settings()
         self.torch = torch
         self.model_id = model_id
+        choice = select_device(device)
+        self.device = choice.device
+        self.dtype = dtype_for(self.device, "vlm")
+        self.max_image_side = max_image_side or s.vlm_max_image_side
+        self.max_new_tokens = s.vlm_max_new_tokens
         self.processor = AutoProcessor.from_pretrained(model_id)
-        self.model = AutoModelForImageTextToText.from_pretrained(
-            model_id, dtype=torch.bfloat16, device_map=device_map, trust_remote_code=False
-        )
+        # CUDA keeps accelerate's device_map (allows offload on 8 GB cards). MPS/CPU: load then move as a whole —
+        # accelerate's "auto" map does not target MPS reliably.
+        kwargs: dict[str, Any] = {"dtype": self.dtype, "trust_remote_code": False}
+        if self.device == "cuda":
+            kwargs["device_map"] = "auto"
+        self.model = AutoModelForImageTextToText.from_pretrained(model_id, **kwargs)
+        if self.device != "cuda":
+            self.model.to(self.device)
         self.model.eval()
 
-    def analyze(self, image: PILImage.Image, mode: AnalysisMode, max_new_tokens: int = 1024) -> AnalysisOutput:
+    def _prepare(self, image: PILImage.Image) -> tuple[PILImage.Image, list[int]]:
+        img = image.convert("RGB")
+        original = list(img.size)
+        if max(img.size) > self.max_image_side:
+            img = img.copy()
+            img.thumbnail((self.max_image_side, self.max_image_side), PILImage.Resampling.LANCZOS)
+        return img, original
+
+    def analyze(self, image: PILImage.Image, mode: AnalysisMode, max_new_tokens: int | None = None) -> AnalysisOutput:
+        from app.runtime.device import synchronize
+
         t0 = time.perf_counter()
+        max_new_tokens = max_new_tokens or self.max_new_tokens
         instruction = STRUCTURED_INSTRUCTION if mode == "structured" else CAPTION_INSTRUCTION
-        messages = [{"role": "user", "content": [{"type": "image", "image": image.convert("RGB")},
+        img, original = self._prepare(image)
+        messages = [{"role": "user", "content": [{"type": "image", "image": img},
                                                   {"type": "text", "text": instruction}]}]
         inputs = self.processor.apply_chat_template(messages, tokenize=True, add_generation_prompt=True,
                                                     return_dict=True, return_tensors="pt").to(self.model.device)
         with self.torch.inference_mode():
             out_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        synchronize(self.device)
         trimmed = out_ids[:, inputs["input_ids"].shape[1]:]
         text = self.processor.batch_decode(trimmed, skip_special_tokens=True)[0]
         import transformers
 
-        runtime = {"device": str(self.model.device), "dtype": "bfloat16", "torch": self.torch.__version__,
-                   "transformers": transformers.__version__, "decoding": "greedy",
-                   "max_new_tokens": max_new_tokens}
-        if self.torch.cuda.is_available():
+        runtime = {"device": str(self.model.device), "dtype": str(self.dtype).removeprefix("torch."),
+                   "torch": self.torch.__version__, "transformers": transformers.__version__, "decoding": "greedy",
+                   "max_new_tokens": max_new_tokens, "generated_tokens": int(trimmed.shape[1]),
+                   "input_tokens": int(inputs["input_ids"].shape[1]), "image_size_original": original,
+                   "image_size_model_input": list(img.size), "max_image_side": self.max_image_side}
+        if self.device == "cuda":
             runtime["gpu"] = self.torch.cuda.get_device_name(0)
         return _parse("qwen3vl_local", self.model_id, mode, text, t0, runtime)
 
     def unload(self) -> None:
+        from app.runtime.device import empty_cache
+
         del self.model
-        if self.torch.cuda.is_available():
-            self.torch.cuda.empty_cache()
+        del self.processor
+        empty_cache(self.device)
 
 
 class OpenAICompatibleProvider(VLMProvider):

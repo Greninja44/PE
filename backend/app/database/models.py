@@ -84,6 +84,7 @@ class Analysis(TimestampMixin, Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
     job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
+    runtime_info: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)  # device, dtype, tokens, memory
 
     reconstruction: Mapped[Reconstruction] = relationship(back_populates="analyses")
 
@@ -194,6 +195,21 @@ class Experiment(TimestampMixin, Base):
     hypothesis: Mapped[str] = mapped_column(Text, default="")
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     code_fingerprint: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class HumanRating(TimestampMixin, Base):
+    """A human judgement of one generated image against its reference. Stored apart from ``metric_results`` so
+    human evaluation is never mixed into automatic metric aggregates."""
+
+    __tablename__ = "human_ratings"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    generation_id: Mapped[str] = mapped_column(ForeignKey("generation_runs.id"), index=True)
+    rater: Mapped[str] = mapped_column(String(64))
+    similarity: Mapped[int] = mapped_column(Integer)  # 1 (unrelated) … 5 (near-identical)
+    subject_match: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1…5, optional
+    style_match: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1…5, optional
+    blind: Mapped[bool] = mapped_column(Boolean, default=False)  # rater did not see the condition/prompt
+    notes: Mapped[str] = mapped_column(Text, default="")
 
 
 class Job(TimestampMixin, Base):

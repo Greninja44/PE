@@ -69,15 +69,16 @@ def run_inline_analysis(analysis_id: str, provider_name: str, model: str | None)
         try:
             provider = get_vlm_provider(provider_name, model)
             out = provider.analyze(storage.load_pil(db.get(Image, a.image_id)), a.mode)  # type: ignore[arg-type]
-            record_analysis_output(db, a, out.raw_output, out.model, out.duration_s)
+            record_analysis_output(db, a, out.raw_output, out.model, out.duration_s, out.runtime_info)
         except Exception as e:  # noqa: BLE001 — persist any failure on the row
             log.exception("inline analysis failed")
             a.status, a.error = "failed", f"{type(e).__name__}: {e}"
             db.commit()
 
 
-def record_analysis_output(db: Session, a: Analysis, raw_output: str, model: str, duration_s: float) -> None:
-    a.raw_output, a.model, a.duration_s = raw_output, model, duration_s
+def record_analysis_output(db: Session, a: Analysis, raw_output: str, model: str, duration_s: float,
+                           runtime_info: dict[str, Any] | None = None) -> None:
+    a.raw_output, a.model, a.duration_s, a.runtime_info = raw_output, model, duration_s, runtime_info
     try:
         if a.mode == "structured":
             a.result = parse_structured_output(raw_output).model_dump()

@@ -1,6 +1,7 @@
-"""GPU worker agent — run on the RTX 5060 machine.
+"""Inference worker agent — runs on this Mac (Apple MPS) or on a separate NVIDIA machine.
 
-    python -m app.workers.agent doctor
+    python -m app.workers.agent doctor                                   # verify torch + device with real ops
+    python -m app.workers.agent local                                    # same-machine worker (auto-registers)
     python -m app.workers.agent register --server http://HOST:8000 --admin-token XXX --name rtx5060
     python -m app.workers.agent run --server http://HOST:8000            # token from env or token file
 
@@ -31,6 +32,7 @@ from app.workers.schemas import JOB_TYPES
 
 log = logging.getLogger("pe.worker")
 TOKEN_FILE = Path(os.environ.get("PE_WORKER_TOKEN_FILE", Path.home() / ".config" / "pe-worker" / "token"))
+LOCAL_TOKEN_FILE = TOKEN_FILE.with_name("token-local")
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
 
 
@@ -113,19 +115,32 @@ class Heartbeat(threading.Thread):
         self._stop.set()
 
 
-def capabilities() -> dict[str, Any]:
+def capabilities(mm: ModelManager | None = None) -> dict[str, Any]:
     from importlib.util import find_spec
 
-    return {"job_types": list(JOB_TYPES), "runtime": runtime_snapshot(),
-            "packages": {m: find_spec(m) is not None for m in ("torch", "diffusers", "transformers", "lpips")}}
+    from app.runtime import memory
+
+    caps: dict[str, Any] = {
+        "job_types": list(JOB_TYPES), "runtime": runtime_snapshot(), "memory": memory.snapshot(),
+        "packages": {m: find_spec(m) is not None for m in ("torch", "diffusers", "transformers", "lpips")},
+        "reported_at": time.time(),
+    }
+    if mm is not None:
+        caps["resident_models"] = mm.resident()
+        caps["model_events"] = mm.events[-8:]
+    return caps
 
 
 def run(server: str, token: str, types: list[str], poll: float, once: bool) -> int:
+    from app.config.settings import get_settings
+
+    idle_unload = get_settings().worker_idle_unload_s
     client = WorkerClient(server, token)
-    caps = capabilities()
-    info = client.heartbeat(caps)
-    log.info("connected as %s (%s); runtime=%s", info["name"], info["worker_id"], caps["runtime"])
     mm = ModelManager()
+    caps = capabilities(mm)
+    info = client.heartbeat(caps)
+    log.info("connected as %s (%s); device=%s", info["name"], info["worker_id"],
+             caps["runtime"].get("selected_device"))
     stopping = {"flag": False}
 
     def _sig(*_: Any) -> None:
@@ -137,8 +152,8 @@ def run(server: str, token: str, types: list[str], poll: float, once: bool) -> i
     last_hb = time.monotonic()
     while not stopping["flag"]:
         try:
-            if time.monotonic() - last_hb > 30:
-                client.heartbeat({})
+            if time.monotonic() - last_hb > 15:
+                client.heartbeat(capabilities(mm))  # live memory + resident models for the dashboard
                 last_hb = time.monotonic()
             job = client.claim(types)
         except httpx.HTTPError as e:
@@ -148,9 +163,12 @@ def run(server: str, token: str, types: list[str], poll: float, once: bool) -> i
         if job is None:
             if once:
                 return 0
+            if mm.unload_if_idle(idle_unload):
+                last_hb = 0.0  # report the freed memory promptly
             time.sleep(poll)
             continue
         execute(client, job, mm)
+        last_hb = 0.0
         if once:
             return 0
     mm.unload_all()
@@ -178,27 +196,99 @@ def execute(client: WorkerClient, job: dict[str, Any], mm: ModelManager) -> None
         client.fail(jid, f"{type(e).__name__}: {e}", retryable=False)
     except Exception as e:  # noqa: BLE001
         log.exception("job %s failed", jid)
-        oom = "out of memory" in str(e).lower()
-        if oom:
-            mm.unload_all()
+        from app.runtime.device import is_oom
+        from app.runtime.lifecycle import InsufficientMemory
+
+        if isinstance(e, InsufficientMemory):
+            client.fail(jid, f"{type(e).__name__}: {e}", retryable=False)
+            return
+        if is_oom(e):
+            mm.unload_all(reason="out of memory")
+            msg = (f"{type(e).__name__}: {e}\nOut of memory: models were unloaded. Try a lower resolution, close "
+                   "other applications, or set PE_DEVICE=cpu.")
+            client.fail(jid, msg, retryable=True)
+            return
         client.fail(jid, f"{type(e).__name__}: {e}", retryable=True)
     finally:
         hb.stop()
 
 
 def doctor() -> int:
+    """Check the installation by running real tensor operations on the selected device (an import alone proves
+    nothing)."""
     snap = runtime_snapshot()
-    print(json.dumps(capabilities(), indent=2))
+    print(json.dumps(capabilities(), indent=2, default=str))
     if not snap.get("torch"):
-        print("\n✗ torch not installed. See docs/RTX5060_SETUP.md")
+        print("\n✗ torch not installed. macOS: scripts/setup_mac.sh · NVIDIA: docs/RTX5060_SETUP.md")
         return 1
-    if not snap.get("cuda_available"):
-        print("\n✗ CUDA not available to torch. Install a CUDA 12.8+ build (cu128) for RTX 50-series.")
+    import torch
+
+    from app.runtime.device import select_device, synchronize
+
+    dev = select_device().device
+    try:
+        dt = torch.float16 if dev != "cpu" else torch.float32
+        x = torch.randn(512, 512, device=dev, dtype=dt)
+        y = torch.nn.functional.conv2d(x[None, None], torch.ones(1, 1, 3, 3, device=dev, dtype=dt))
+        val = float((x @ x).float().mean().item()) + float(y.float().mean().item())
+        synchronize(dev)
+        assert val == val, "NaN"
+    except Exception as e:  # noqa: BLE001
+        print(f"\n✗ tensor ops failed on {dev}: {type(e).__name__}: {e}")
         return 1
-    if snap.get("capability", "").startswith("12") and not snap.get("cuda", "0").startswith(("12.8", "12.9", "13")):
-        print("\n⚠ Blackwell GPU (sm_120) needs a torch build with CUDA ≥ 12.8.")
-    print("\n✓ GPU ready:", snap.get("gpu"))
+    if dev == "cuda":
+        if snap.get("capability", "").startswith("12") and not snap.get("cuda", "0").startswith(("12.8", "12.9", "13")):
+            print("\n⚠ Blackwell GPU (sm_120) needs a torch build with CUDA ≥ 12.8.")
+        print("\n✓ CUDA ready:", snap.get("gpu"))
+    elif dev == "mps":
+        print(f"\n✓ Apple MPS ready: {snap.get('gpu')} · recommended max working set "
+              f"{snap.get('mps_recommended_max_gb')} GB · CPU fallback for missing ops: "
+              f"{'on' if snap.get('mps_fallback_enabled') else 'off'}")
+    else:
+        print("\n⚠ No GPU backend: running on CPU (functional, slow).")
     return 0
+
+
+def _register(server: str, admin_token: str, name: str, token_file: Path) -> str:
+    resp = httpx.post(f"{server.rstrip('/')}/api/worker/register", headers={"X-Admin-Token": admin_token},
+                      json={"name": name, "capabilities": capabilities()}, timeout=30)
+    if resp.status_code != 201:
+        raise RuntimeError(f"registration failed ({resp.status_code}): {resp.text}")
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    token_file.write_text(resp.json()["token"])
+    token_file.chmod(0o600)
+    return resp.json()["token"]
+
+
+def local(server: str, types: list[str], poll: float, wait_s: float = 60.0) -> int:
+    """Same-machine worker: waits for the API, registers with the admin token from backend/.env if needed
+    (re-registering if the local database was reset), then runs."""
+    from app.config.settings import get_settings
+
+    s = get_settings()
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            httpx.get(f"{server}/api/health", timeout=3).raise_for_status()
+            break
+        except httpx.HTTPError:
+            if time.monotonic() > deadline:
+                print(f"API not reachable at {server}", file=sys.stderr)
+                return 1
+            time.sleep(1)
+    token = LOCAL_TOKEN_FILE.read_text().strip() if LOCAL_TOKEN_FILE.exists() else ""
+    if token:
+        r = httpx.post(f"{server}/api/worker/heartbeat", json={"capabilities": {}},
+                       headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        if r.status_code == 401:
+            token = ""
+    if not token:
+        if not s.admin_token:
+            print("PE_ADMIN_TOKEN is empty in backend/.env — run scripts/setup_mac.sh", file=sys.stderr)
+            return 1
+        token = _register(server, s.admin_token, s.local_worker_name, LOCAL_TOKEN_FILE)
+        log.info("registered local worker '%s'", s.local_worker_name)
+    return run(server, token, types, poll, once=False)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -206,7 +296,11 @@ def main(argv: list[str] | None = None) -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)  # do not log every 3-second poll
     ap = argparse.ArgumentParser(prog="python -m app.workers.agent")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("doctor", help="check torch/CUDA/GPU")
+    sub.add_parser("doctor", help="check torch and the selected device (MPS/CUDA/CPU) with real tensor ops")
+    lo = sub.add_parser("local", help="run a worker for the API on this machine (auto-registers)")
+    lo.add_argument("--server", default="http://127.0.0.1:8000")
+    lo.add_argument("--types", default=",".join(JOB_TYPES))
+    lo.add_argument("--poll", type=float, default=1.0)
     reg = sub.add_parser("register", help="register this machine and store its token")
     reg.add_argument("--server", required=True)
     reg.add_argument("--admin-token", default=os.environ.get("PE_ADMIN_TOKEN", ""))
@@ -221,16 +315,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd == "doctor":
         return doctor()
+    if a.cmd == "local":
+        return local(a.server.rstrip("/"), [t for t in a.types.split(",") if t in JOB_TYPES], a.poll)
     if a.cmd == "register":
-        resp = httpx.post(f"{a.server.rstrip('/')}/api/worker/register", headers={"X-Admin-Token": a.admin_token},
-                          json={"name": a.name, "capabilities": capabilities()}, timeout=30)
-        if resp.status_code != 201:
-            print(f"registration failed ({resp.status_code}): {resp.text}", file=sys.stderr)
+        try:
+            _register(a.server, a.admin_token, a.name, TOKEN_FILE)
+        except RuntimeError as e:
+            print(e, file=sys.stderr)
             return 1
-        TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-        TOKEN_FILE.write_text(resp.json()["token"])
-        TOKEN_FILE.chmod(0o600)
-        print(f"registered worker {resp.json()['worker_id']}; token saved to {TOKEN_FILE}")
+        print(f"registered worker; token saved to {TOKEN_FILE}")
         return 0
     token = a.token or (TOKEN_FILE.read_text().strip() if TOKEN_FILE.exists() else "")
     if not token:

@@ -1,0 +1,12 @@
+# Apple Silicon (macOS arm64) inference worker. PyPI's macOS torch wheels include the MPS (Metal) backend —
+# no CUDA packages, no extra index URL. Install with:  uv pip install -r requirements-mac.txt
+-r requirements.txt
+torch>=2.5
+torchvision>=0.20
+diffusers>=0.32
+transformers>=4.57      # Qwen3-VL support
+accelerate>=1.0
+safetensors>=0.4
+lpips>=0.1.4
+psutil>=5.9             # memory diagnostics
+huggingface_hub>=0.26

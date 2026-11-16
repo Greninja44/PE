@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     # Default model choices
     default_vlm_model: str = "Qwen/Qwen3-VL-2B-Instruct"
 
+    # Inference runtime (used by the worker process only; the API never imports torch)
+    device: str = Field(default="auto", description="auto | mps | cuda | cpu")
+    half_precision: bool = True  # bf16 VLM / fp16 diffusion on GPU backends; metrics always fp32
+    vlm_max_image_side: int = 768  # reference images are downscaled before the VLM (visual tokens ∝ pixels)
+    vlm_max_new_tokens: int = 1024
+    attention_slicing: str = "auto"  # auto (on for MPS) | on | off
+    worker_idle_unload_s: int = 300  # unload models after this many idle seconds (0 = never)
+    strict_memory_check: bool = False  # refuse to load a model when free memory < estimate + margin
+    memory_margin_gb: float = 1.0
+    local_worker_name: str = "local-mac"
+
     @property
     def originals_dir(self) -> Path:
         return self.experiments_dir / "originals"

@@ -27,6 +27,8 @@ class ModelSpec:
     max_side: int
     notes: str = ""
     vram_note: str = ""
+    est_gb: float = 0.0  # approximate fp16 weight footprint, for the pre-load memory check (not a measurement)
+    recommended_16gb: bool = True
 
 
 MODEL_REGISTRY: dict[str, ModelSpec] = {
@@ -34,18 +36,21 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         key="sd15", hf_id="stable-diffusion-v1-5/stable-diffusion-v1-5", label="Stable Diffusion 1.5", family="sd15",
         default_steps=30, default_cfg=7.5, default_size=512, steps_range=(1, 150), cfg_range=(0.0, 30.0),
         max_side=1024, notes="CLIP ViT-L/14 text encoder, 77-token window.", vram_note="~3.5 GB fp16",
+        est_gb=2.8,
     ),
     "sd_turbo": ModelSpec(
         key="sd_turbo", hf_id="stabilityai/sd-turbo", label="SD-Turbo", family="sd21",
         default_steps=1, default_cfg=0.0, default_size=512, steps_range=(1, 4), cfg_range=(0.0, 0.0),
         max_side=768, notes="Adversarial diffusion distillation: 1–4 steps, trained without CFG (guidance 0).",
-        vram_note="~3 GB fp16",
+        vram_note="~3 GB fp16", est_gb=2.6,
     ),
     "sdxl": ModelSpec(
         key="sdxl", hf_id="stabilityai/stable-diffusion-xl-base-1.0", label="SDXL 1.0 base", family="sdxl",
         default_steps=30, default_cfg=7.0, default_size=1024, steps_range=(1, 100), cfg_range=(0.0, 20.0),
         max_side=1536, notes="Dual text encoders (CLIP-L + OpenCLIP-bigG). Native 1024×1024.",
-        vram_note="~7–8 GB fp16; on an 8 GB RTX 5060 use model CPU offload (enabled automatically)",
+        vram_note="~7–8 GB fp16; on an 8 GB RTX 5060 use model CPU offload (enabled automatically). "
+                  "Not recommended on 16 GB Apple Silicon (not tested there).",
+        est_gb=7.5, recommended_16gb=False,
     ),
 }
 

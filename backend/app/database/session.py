@@ -37,8 +37,26 @@ def init_engine(url: str | None = None) -> Engine:
             cur.close()
 
     Base.metadata.create_all(_engine)
+    _add_missing_columns(_engine)
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
     return _engine
+
+
+# Additive, nullable columns introduced after the initial schema. ``create_all`` never alters existing tables,
+# so databases created by earlier versions get these columns added in place. Nothing is dropped or rewritten.
+ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("analyses", "runtime_info", "JSON"),
+)
+
+
+def _add_missing_columns(engine: Engine) -> None:
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table, column, sqltype in ADDITIVE_COLUMNS:
+            if table in insp.get_table_names() and column not in {c["name"] for c in insp.get_columns(table)}:
+                conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {sqltype}'))
 
 
 def get_sessionmaker() -> sessionmaker[Session]:

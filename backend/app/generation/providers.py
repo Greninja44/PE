@@ -21,7 +21,7 @@ from app.generation.base import MODEL_REGISTRY, GenerationOutput, GenerationPara
 class GPUWorkerProvider(GenerationProvider):
     name = "gpu_worker"
     execution = "worker"
-    description = "Diffusers pipelines on the local GPU worker (RTX 5060). Fully seeded and reproducible."
+    description = "Diffusers on the local inference worker (Apple MPS, NVIDIA CUDA or CPU). Fully seeded."
 
     def availability(self) -> Availability:
         return Availability(available=True, reason="Executes on the GPU worker (job queued until a worker claims it)")
@@ -68,36 +68,62 @@ class HFInferenceProvider(GenerationProvider):
 class DiffusersRunner:
     """Local diffusers execution. Imported and instantiated ONLY in the GPU worker process."""
 
-    def __init__(self, model_key: str, cpu_offload: bool | None = None) -> None:
+    def __init__(self, model_key: str, cpu_offload: bool | None = None, device: str | None = None) -> None:
         if model_key not in MODEL_REGISTRY:
             raise ValueError(f"Model '{model_key}' is not in the registry")
         import torch
         from diffusers import AutoPipelineForText2Image
 
+        from app.runtime.device import dtype_for, select_device
+
+        s = get_settings()
         self.torch = torch
         self.spec = MODEL_REGISTRY[model_key]
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        dtype = torch.float16 if self.device == "cuda" else torch.float32
-        kwargs: dict[str, Any] = {"torch_dtype": dtype, "use_safetensors": True}
-        if self.device == "cuda" and self.spec.family in ("sdxl", "sd21"):
-            kwargs["variant"] = "fp16"
-        self.pipe = AutoPipelineForText2Image.from_pretrained(self.spec.hf_id, **kwargs)
+        self.device = select_device(device).device
+        self.dtype = dtype_for(self.device, "diffusion")
+        kwargs: dict[str, Any] = {"torch_dtype": self.dtype, "use_safetensors": True}
+        # fp16 weight files halve download size and load memory. They are also used for fp32 CPU inference
+        # (upcast on load); the original CUDA behaviour (fp32 files for SD 1.5) is preserved.
+        self.weights_variant = None
+        if not (self.device == "cuda" and self.spec.family == "sd15"):
+            self.weights_variant = "fp16"
+        try:
+            self.pipe = AutoPipelineForText2Image.from_pretrained(self.spec.hf_id, variant=self.weights_variant,
+                                                                  **kwargs)
+        except (OSError, ValueError):
+            if self.weights_variant is None:
+                raise
+            self.weights_variant = None
+            self.pipe = AutoPipelineForText2Image.from_pretrained(self.spec.hf_id, **kwargs)
         # SD 1.5's safety checker is kept; if it blacks out an image, runtime_info records nsfw_flagged=True.
         vram_gb = (torch.cuda.get_device_properties(0).total_memory / 1e9) if self.device == "cuda" else 0
-        self.offload = cpu_offload if cpu_offload is not None else (self.spec.family == "sdxl" and vram_gb < 12)
+        self.offload = cpu_offload if cpu_offload is not None else (
+            self.device == "cuda" and self.spec.family == "sdxl" and vram_gb < 12)
         if self.device == "cuda" and self.offload:
             self.pipe.enable_model_cpu_offload()
         else:
             self.pipe.to(self.device)
         if self.spec.family == "sdxl":
             self.pipe.enable_vae_slicing()
+        # Attention slicing lowers peak memory on unified-memory Macs at a small speed cost (diffusers' advice
+        # for machines with < 64 GB). "auto" enables it on MPS only.
+        self.attention_slicing = s.attention_slicing == "on" or (s.attention_slicing == "auto" and self.device == "mps")
+        if self.attention_slicing:
+            self.pipe.enable_attention_slicing()
         self.pipe.set_progress_bar_config(disable=True)
 
     def generate(self, prompt: str, params: GenerationParams, progress_cb=None) -> GenerationOutput:  # noqa: ANN001
         import diffusers
+        import numpy as np
+
+        from app.runtime.device import synchronize
 
         t0 = time.perf_counter()
-        gen = self.torch.Generator(device="cpu" if self.offload else self.device).manual_seed(params.seed)
+        # CUDA keeps its original on-device generator (reproduces earlier RTX runs). MPS/CPU use a CPU generator:
+        # the initial noise is then identical on every machine for a given seed, and MPS generators are not
+        # guaranteed to be deterministic across macOS/PyTorch versions.
+        gen_device = "cpu" if (self.offload or self.device != "cuda") else self.device
+        gen = self.torch.Generator(device=gen_device).manual_seed(params.seed)
         kwargs: dict[str, Any] = dict(prompt=prompt, num_inference_steps=params.steps, guidance_scale=params.cfg_scale,
                                       width=params.width, height=params.height, generator=gen)
         if params.negative_prompt and params.cfg_scale and params.cfg_scale > 1.0:
@@ -109,25 +135,36 @@ class DiffusersRunner:
             kwargs["callback_on_step_end"] = _cb
         with self.torch.inference_mode():
             result = self.pipe(**kwargs)
+        synchronize(self.device)
         img = ensure_rgb(result.images[0])
         nsfw = getattr(result, "nsfw_content_detected", None)
+        flagged = bool(nsfw[0]) if nsfw is not None else False
+        if not flagged and int(np.asarray(img).max()) == 0:
+            # Half-precision overflow in the VAE yields NaNs, which post-processing turns into a black frame.
+            # Report it as a failure rather than storing a black image as if it were a genuine output.
+            raise RuntimeError(f"{self.spec.label} produced an all-black image on {self.device} "
+                               f"({str(self.dtype).removeprefix('torch.')}) without an NSFW flag — likely a "
+                               "half-precision NaN. Retry with PE_HALF_PRECISION=false.")
         runtime = {
             "provider": "gpu_worker", "model_id": self.spec.hf_id, "device": self.device,
             "torch": self.torch.__version__, "diffusers": diffusers.__version__, "cpu_offload": self.offload,
-            "dtype": "float16" if self.device == "cuda" else "float32", "reproducible": True,
+            "dtype": str(self.dtype).removeprefix("torch."), "reproducible": True,
+            "generator_device": gen_device, "weights_variant": self.weights_variant,
+            "attention_slicing": self.attention_slicing,
             "negative_prompt_applied": "negative_prompt" in kwargs,
         }
         if nsfw is not None:
-            runtime["nsfw_flagged"] = bool(nsfw[0])
+            runtime["nsfw_flagged"] = flagged
         if self.device == "cuda":
             runtime["gpu"] = self.torch.cuda.get_device_name(0)
             runtime["peak_vram_gb"] = round(self.torch.cuda.max_memory_allocated() / 1e9, 2)
         return GenerationOutput(image=img, duration_s=round(time.perf_counter() - t0, 3), runtime_info=runtime)
 
     def unload(self) -> None:
+        from app.runtime.device import empty_cache
+
         del self.pipe
-        if self.torch.cuda.is_available():
-            self.torch.cuda.empty_cache()
+        empty_cache(self.device)
 
 
 GENERATION_PROVIDER_NAMES = ("gpu_worker", "hf_inference")

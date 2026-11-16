@@ -46,7 +46,7 @@ def apply_job_result(db: Session, job: Job, result: dict[str, Any], image_bytes:
         a = db.get(Analysis, p["analysis_id"])
         if a is None:
             raise ResultError("analysis row missing")
-        record_analysis_output(db, a, r.raw_output, r.model, r.duration_s)
+        record_analysis_output(db, a, r.raw_output, r.model, r.duration_s, r.runtime_info | {"job_id": job.id})
         from app.refinement.controller import on_analysis_completed
 
         on_analysis_completed(db, a)

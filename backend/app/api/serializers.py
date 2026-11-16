@@ -6,6 +6,7 @@ from typing import Any
 from app.database.models import (
     Analysis,
     GenerationRun,
+    HumanRating,
     Image,
     Job,
     MetricResult,
@@ -28,7 +29,7 @@ def analysis(a: Analysis) -> dict[str, Any]:
     return {"id": a.id, "reconstruction_id": a.reconstruction_id, "image_id": a.image_id, "mode": a.mode,
             "provider": a.provider, "model": a.model, "status": a.status, "result": a.result, "caption": a.caption,
             "raw_output": a.raw_output, "error": a.error, "duration_s": a.duration_s, "job_id": a.job_id,
-            "is_manual": a.provider == "manual", "created_at": a.created_at}
+            "is_manual": a.provider == "manual", "runtime_info": a.runtime_info, "created_at": a.created_at}
 
 
 def prompt_version(p: PromptVersion) -> dict[str, Any]:
@@ -77,3 +78,9 @@ def job(j: Job) -> dict[str, Any]:
             "error": j.error, "attempts": j.attempts, "max_attempts": j.max_attempts, "worker_id": j.worker_id,
             "progress": j.progress, "progress_message": j.progress_message, "lease_expires_at": j.lease_expires_at,
             "created_at": j.created_at, "started_at": j.started_at, "finished_at": j.finished_at}
+
+
+def human_rating(h: HumanRating) -> dict[str, Any]:
+    return {"id": h.id, "generation_id": h.generation_id, "rater": h.rater, "similarity": h.similarity,
+            "subject_match": h.subject_match, "style_match": h.style_match, "blind": h.blind, "notes": h.notes,
+            "kind": "human", "created_at": h.created_at}
