@@ -150,7 +150,11 @@ def test_refinement_approve_reject_and_early_stop(client, recon, worker_token):
     assert client.post(f"/api/refinement/{s['id']}/propose", json={}).status_code == 422
 
     comp = client.get(f"/api/reconstructions/{rid}/comparison").json()
-    assert comp["conditions"]["C_refined"]["id"] == s["iterations"][2]["generation_id"]
+    # C shows the FINAL scored iteration (p3), not the post-hoc best (p2), to avoid selection bias;
+    # the best iteration is still reported alongside.
+    assert comp["conditions"]["C_refined"]["id"] == s["iterations"][-1]["generation_id"]
+    assert comp["refinement"]["shown"] == "final_scored_iteration"
+    assert comp["refinement"]["shown_iteration"] == p3["iteration"]
     assert comp["refinement"]["best_iteration"] == p2["iteration"]
 
 

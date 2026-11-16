@@ -23,6 +23,7 @@ from app.database.models import (
     Analysis,
     Experiment,
     GenerationRun,
+    HumanRating,
     Reconstruction,
     RefinementSession,
 )
@@ -94,7 +95,12 @@ def reconstruction_record(db: Session, r: Reconstruction) -> dict[str, Any]:
             "output_image": g.output_image.path if g.output_image else None,
             "refinement_session_id": iter_by_gen.get(g.id, (None, None))[0],
             "iteration": iter_by_gen.get(g.id, (None, None))[1],
-            "metrics": _metrics(g), "created_at": g.created_at.isoformat()} for g in r.generations],
+            "metrics": _metrics(g),
+            "human_ratings": [{"rater": h.rater, "similarity": h.similarity, "subject_match": h.subject_match,
+                               "style_match": h.style_match, "blind": h.blind, "notes": h.notes,
+                               "created_at": h.created_at.isoformat()}
+                              for h in db.scalars(select(HumanRating).where(HumanRating.generation_id == g.id))],
+            "created_at": g.created_at.isoformat()} for g in r.generations],
         "refinement_sessions": [{
             "id": s.id, "optimization_metric": s.optimization_metric, "max_iterations": s.max_iterations,
             "patience": s.patience, "min_delta": s.min_delta, "status": s.status, "stop_reason": s.stop_reason,
@@ -117,7 +123,14 @@ def experiment_record(db: Session, exp: Experiment) -> dict[str, Any]:
         "code_fingerprint_at_export": code_fingerprint(),
         "exported_at": datetime.now(UTC).isoformat(),
         "reconstructions": [reconstruction_record(db, r) for r in recons],
+        "comparison": _aggregate(db, exp.id),
     }
+
+
+def _aggregate(db: Session, experiment_id: str) -> dict[str, Any]:
+    from app.experiments.comparison import aggregate
+
+    return aggregate(db, experiment_id)
 
 
 CSV_FIELDS = ("experiment_id", "reconstruction_id", "reference_sha256", "generation_id", "condition",
@@ -206,21 +219,23 @@ def _thumb(src: Path, dest: Path, max_side: int = 768) -> None:
 
 
 def comparison(db: Session, r: Reconstruction) -> dict[str, Any]:
-    """Latest completed generation per condition (A caption, B structured, C refined-best)."""
+    """Latest completed generation per condition (A caption, D detailed, B structured) and, for C, the FINAL scored
+    iteration of the latest refinement session — not the best one, which is selected post hoc by the optimisation
+    metric and would overstate refinement (selection bias). The best iteration is reported alongside."""
     out: dict[str, Any] = {}
-    for cond in ("A_caption", "B_structured"):
+    for cond in ("A_caption", "D_detailed", "B_structured"):
         g = next((g for g in reversed(r.generations) if g.condition == cond and g.status == "completed"), None) or \
             next((g for g in reversed(r.generations) if g.condition == cond), None)
         out[cond] = g
-    best = None
+    chosen = None
     for s in db.scalars(select(RefinementSession).where(RefinementSession.reconstruction_id == r.id)
                         .order_by(RefinementSession.created_at.desc())):
-        it = next((i for i in s.iterations if i.id == s.best_iteration_id), None)
-        if it and it.generation_id:
-            best = (s, it)
+        scored = [i for i in s.iterations if i.status == "scored" and i.generation_id and i.iteration > 0]
+        if scored:
+            chosen = (s, max(scored, key=lambda i: i.iteration))
             break
-    out["C_refined"] = db.get(GenerationRun, best[1].generation_id) if best else None
-    out["_session"] = best
+    out["C_refined"] = db.get(GenerationRun, chosen[1].generation_id) if chosen else None
+    out["_session"] = chosen
     return out
 
 
@@ -234,7 +249,7 @@ def export_demo_bundle(db: Session, r: Reconstruction) -> str:
     _thumb(storage.image_path(r.image), root / "reference.jpg")
     comp = comparison(db, r)
     conditions: dict[str, Any] = {}
-    for cond in ("A_caption", "B_structured", "C_refined"):
+    for cond in ("A_caption", "D_detailed", "B_structured", "C_refined"):
         g: GenerationRun | None = comp[cond]
         if g is None:
             conditions[cond] = {"status": "not_executed"}
@@ -252,8 +267,12 @@ def export_demo_bundle(db: Session, r: Reconstruction) -> str:
         conditions[cond] = entry
     if comp["_session"]:
         sess, it = comp["_session"]
+        best = next((i for i in sess.iterations if i.id == sess.best_iteration_id), None)
         conditions["C_refined"]["refinement"] = {
-            "session_id": sess.id, "best_iteration": it.iteration, "optimization_metric": sess.optimization_metric,
+            "session_id": sess.id, "shown_iteration": it.iteration, "shown": "final_scored_iteration",
+            "best_iteration": best.iteration if best else None,
+            "best_note": "Best iteration is selected by the optimisation metric (biased); the final one is shown.",
+            "optimization_metric": sess.optimization_metric,
             "history": [{"iteration": i.iteration, "status": i.status, "score": i.optimization_score}
                         for i in sess.iterations],
         }

@@ -16,6 +16,7 @@ from app.database.models import (
     Analysis,
     Experiment,
     GenerationRun,
+    HumanRating,
     Image,
     PromptVersion,
     Reconstruction,
@@ -211,7 +212,7 @@ class GenerationRequest(BaseModel):
     prompt_version_id: str
     provider: str = "gpu_worker"
     params: GenerationParams = Field(default_factory=GenerationParams)
-    condition: Literal["A_caption", "B_structured", "C_refined"] | None = None
+    condition: Literal["A_caption", "D_detailed", "B_structured", "C_refined"] | None = None
 
 
 @router.post("/reconstructions/{rid}/generations", status_code=202)
@@ -252,6 +253,7 @@ def evaluate(gid: str, body: EvaluateRequest, background: BackgroundTasks, db: S
 # ------------------------------------------------------------------------- comparison (demo A / B / C)
 class ComparisonRequest(BaseModel):
     caption_prompt_version_id: str | None = None
+    detailed_prompt_version_id: str | None = None
     structured_prompt_version_id: str | None = None
     provider: str = "gpu_worker"
     params: GenerationParams = Field(default_factory=GenerationParams)
@@ -260,11 +262,12 @@ class ComparisonRequest(BaseModel):
 @router.post("/reconstructions/{rid}/comparison", status_code=202)
 def start_comparison(rid: str, body: ComparisonRequest, background: BackgroundTasks, db: Session = DB
                      ) -> list[dict[str, Any]]:
-    """Generate conditions A and B with *identical* model, seed and parameters (controlled comparison).
-    Condition C comes from the best iteration of a refinement session started from B."""
+    """Generate conditions A (caption), D (detailed prose) and B (structured) with *identical* model, seed and
+    parameters (controlled comparison). Refinement (C) comes from a refinement session started from B."""
     r = get_or_404(db, Reconstruction, rid)
     out = []
     for cond, pv_id in (("A_caption", body.caption_prompt_version_id),
+                        ("D_detailed", body.detailed_prompt_version_id),
                         ("B_structured", body.structured_prompt_version_id)):
         if not pv_id:
             continue
@@ -291,11 +294,51 @@ def get_comparison(rid: str, db: Session = DB) -> dict[str, Any]:
     return {
         "reconstruction": S.reconstruction_summary(r),
         "conditions": {k: (S.generation(g) if g else None) for k, g in comp.items()},
-        "refinement": ({"session_id": sess[0].id, "best_iteration": sess[1].iteration,
+        "refinement": ({"session_id": sess[0].id, "shown_iteration": sess[1].iteration,
+                        "shown": "final_scored_iteration",
+                        "best_iteration": next((i.iteration for i in sess[0].iterations
+                                                if i.id == sess[0].best_iteration_id), None),
                         "optimization_metric": sess[0].optimization_metric,
                         "history": [{"iteration": i.iteration, "status": i.status, "score": i.optimization_score}
                                     for i in sess[0].iterations]} if sess else None),
     }
+
+
+@router.get("/reconstructions/{rid}/comparison-table")
+def comparison_table(rid: str, db: Session = DB) -> dict[str, Any]:
+    """Every generation of this reference (none hidden, none selected) with metrics, timing, prompt length,
+    refinement iteration and human-rating summary. Rows sharing ``config_key`` are directly comparable."""
+    from app.experiments.comparison import reconstruction_table
+
+    return reconstruction_table(db, get_or_404(db, Reconstruction, rid))
+
+
+# ---------------------------------------------------------------------------------------- human evaluation
+class HumanRatingRequest(BaseModel):
+    rater: str = Field(min_length=1, max_length=64)
+    similarity: int = Field(ge=1, le=5, description="1 = unrelated … 5 = near-identical to the reference")
+    subject_match: int | None = Field(default=None, ge=1, le=5)
+    style_match: int | None = Field(default=None, ge=1, le=5)
+    blind: bool = False
+    notes: str = Field(default="", max_length=2000)
+
+
+@router.post("/generations/{gid}/ratings", status_code=201)
+def add_rating(gid: str, body: HumanRatingRequest, db: Session = DB) -> dict[str, Any]:
+    g = get_or_404(db, GenerationRun, gid)
+    if g.status != "completed":
+        raise HTTPException(422, "Only completed generations can be rated")
+    h = HumanRating(generation_id=g.id, **body.model_dump())
+    db.add(h)
+    db.commit()
+    return S.human_rating(h)
+
+
+@router.get("/generations/{gid}/ratings")
+def list_ratings(gid: str, db: Session = DB) -> list[dict[str, Any]]:
+    get_or_404(db, GenerationRun, gid)
+    return [S.human_rating(h) for h in db.scalars(select(HumanRating).where(HumanRating.generation_id == gid)
+                                                    .order_by(HumanRating.created_at))]
 
 
 @router.post("/reconstructions/{rid}/demo-bundle", status_code=201)

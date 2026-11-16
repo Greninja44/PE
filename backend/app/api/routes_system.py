@@ -45,6 +45,33 @@ def _workers(db: Session) -> list[dict[str, Any]]:
     return out
 
 
+def _hf_cached(repo_id: str) -> bool | None:
+    """True if completed weight files of ``repo_id`` are in the local Hugging Face cache (no network access).
+    Config files arrive first, so a snapshot folder alone does not mean the model is usable. Weight files are linked
+    into the snapshot only once fully downloaded, so require at least one ``.safetensors`` file there and, for
+    sharded checkpoints, every shard named in each ``*.safetensors.index.json``. (Stale ``.incomplete`` blobs from an
+    interrupted download are ignored.)"""
+    import json
+    import os
+    from pathlib import Path
+
+    try:
+        from huggingface_hub.constants import HF_HUB_CACHE
+    except ImportError:
+        HF_HUB_CACHE = os.path.join(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"), "hub")
+    snaps = Path(HF_HUB_CACHE) / f"models--{repo_id.replace('/', '--')}" / "snapshots"
+    if not snaps.is_dir():
+        return False
+    for idx in snaps.glob("*/**/*.safetensors.index.json"):
+        try:
+            shards = set(json.loads(idx.read_text()).get("weight_map", {}).values())
+        except (OSError, ValueError):
+            return False
+        if not all((idx.parent / s).exists() for s in shards):
+            return False
+    return any(p.exists() for p in snaps.glob("*/**/*.safetensors"))
+
+
 @router.get("/system")
 def system(db: Session = DB) -> dict[str, Any]:
     vlm = []
@@ -72,11 +99,14 @@ def system(db: Session = DB) -> dict[str, Any]:
     return {
         "app": get_settings().app_name,
         "vlm_providers": vlm, "local_vlm_models": ALLOWED_LOCAL_VLMS,
+        "local_vlm_cached": {m: _hf_cached(m) for m in ALLOWED_LOCAL_VLMS},
         "generation_providers": gen,
         "models": [{"key": s.key, "hf_id": s.hf_id, "label": s.label, "family": s.family,
                     "default_steps": s.default_steps, "default_cfg": s.default_cfg, "default_size": s.default_size,
                     "steps_range": s.steps_range, "cfg_range": s.cfg_range, "max_side": s.max_side,
-                    "notes": s.notes, "vram_note": s.vram_note} for s in MODEL_REGISTRY.values()],
+                    "notes": s.notes, "vram_note": s.vram_note, "est_gb": s.est_gb,
+                    "recommended_16gb": s.recommended_16gb, "downloaded": _hf_cached(s.hf_id)}
+                   for s in MODEL_REGISTRY.values()],
         "metrics": metrics,
         "templates": [{"id": t.id, "description": t.description} for t in TEMPLATES.values()],
         "jobs": {k: counts.get(k, 0) for k in ("queued", "running", "succeeded", "failed", "cancelled")},
@@ -108,7 +138,9 @@ def stats(db: Session = DB) -> dict[str, Any]:
         agg.setdefault(metric, {}).setdefault(cond.get(gid) or "unlabelled", []).append(value)
     out = {m: {c: {"n": len(v), "mean": sum(v) / len(v), "min": min(v), "max": max(v)} for c, v in d.items()}
            for m, d in agg.items()}
-    return {"by_metric_and_condition": out,
+    from app.experiments.comparison import aggregate
+
+    return {"by_metric_and_condition": out, "comparison": aggregate(db),
             "counts": {"reconstructions": db.scalar(select(func.count()).select_from(Reconstruction)),
                        "completed_metrics": len(rows)}}
 
@@ -142,6 +174,14 @@ def list_experiments(db: Session = DB) -> list[dict[str, Any]]:
 @router.get("/experiments/{eid}")
 def get_experiment(eid: str, db: Session = DB) -> dict[str, Any]:
     return _exp(db, get_or_404(db, Experiment, eid))
+
+
+@router.get("/experiments/{eid}/comparison")
+def experiment_comparison(eid: str, db: Session = DB) -> dict[str, Any]:
+    from app.experiments.comparison import aggregate
+
+    get_or_404(db, Experiment, eid)
+    return aggregate(db, eid)
 
 
 @router.get("/experiments/{eid}/export.json")
