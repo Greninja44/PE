@@ -115,6 +115,7 @@ backend/.venv/bin/python scripts/download_models.py     # ~9 GB, once (resumable
 
 ```bash
 scripts/dev.sh                    # API :8000 + local inference worker (MPS) + dashboard :5173
+PE_API_PORT=8010 scripts/dev.sh   # if port 8000 is taken (e.g. by Docker)
 ```
 
 Open <http://localhost:5173>. API docs: <http://localhost:8000/docs>. Ctrl+C stops all three.
@@ -150,6 +151,12 @@ scripts/test.sh                                                              # b
 8. **Research Findings** — aggregates, paired win/loss counts, human ratings. **Experiments** — export JSON/CSV
    and write-once reports. **Presentation Mode** (`/present`) for demonstrations.
 
+## Fine-tuning (LoRA on SD 1.5)
+
+LoRA adapters for the SD 1.5 UNet trained on a filtered, CC0 DiffusionDB subset with a prompt-grouped split; trained
+adapters are selectable for SD 1.5 generation and evaluated against the base model on held-out test prompts. Method,
+data, measured training runs and limits: [docs/FINETUNING.md](docs/FINETUNING.md). Dashboard: **Fine-tuning (LoRA)**.
+
 ## Configuration (`backend/.env`, see `.env.example`)
 
 `PE_DEVICE` (auto|mps|cuda|cpu) · `PE_HALF_PRECISION` · `PE_VLM_MAX_IMAGE_SIDE` · `PE_ATTENTION_SLICING` ·
@@ -181,6 +188,8 @@ offers a measured advantage; SDXL on machines with more memory.
 
 ## Other platforms
 
+* **Windows (NVIDIA or CPU):** [docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md) — `scripts\setup_windows.ps1`,
+  `scripts\dev.ps1`, `scripts\test.ps1`.
 * **CPU-only / Codespaces:** `scripts/setup_cloud.sh`, then `PE_NO_WORKER=1 scripts/dev.sh`.
 * **NVIDIA GPU worker (RTX 5060 etc.):** [docs/RTX5060_SETUP.md](docs/RTX5060_SETUP.md) — unchanged; CUDA is
   selected automatically when present.

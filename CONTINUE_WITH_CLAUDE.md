@@ -10,6 +10,11 @@ git checkout macos-apple-silicon-migration
 claude
 ```
 
+**On Windows** follow [docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md) first (or let Claude do it with the prompt below):
+`scripts\setup_windows.ps1` → `scripts\download_models.py` → `scripts\finetune_artifacts.py import` →
+`scripts\dev.ps1`. The PowerShell scripts were written on macOS and have not yet been run on Windows — verifying
+them is the first task.
+
 ---
 
 ## Prompt to paste
@@ -21,8 +26,10 @@ docs/APPLE_SILICON.md, docs/FINETUNING.md and docs/MACOS_MIGRATION_AUDIT.md befo
 
 First:
 1. Inspect this machine (OS, CPU/GPU, RAM, free disk, Python, Node) and tell me which setup path applies:
-   Apple Silicon -> scripts/setup_mac.sh ; NVIDIA GPU -> docs/RTX5060_SETUP.md / scripts/setup_gpu_worker.sh ;
-   CPU only -> scripts/setup_cloud.sh. Do not modify the system Python; use uv + Python 3.12.
+   Windows -> docs/WINDOWS_SETUP.md (scripts\setup_windows.ps1; CUDA if nvidia-smi exists, else CPU) ;
+   Apple Silicon -> scripts/setup_mac.sh ; Linux NVIDIA -> scripts/setup_gpu_worker.sh ; CPU-only Linux ->
+   scripts/setup_cloud.sh. Do not modify the system Python; use uv + Python 3.12. The Windows .ps1 scripts have
+   never been executed on Windows: run them, fix any error you hit, and tell me what you changed.
 2. Run the test suite (scripts/test.sh) and report the result before making changes.
 3. Download only the models needed (backend/.venv/bin/python scripts/download_models.py; it is resumable),
    then verify real inference with scripts/verify_inference.py on a real photograph. Do not claim a model works
@@ -63,10 +70,11 @@ DINOv2, LPIPS (match CPU to ≤ 3e-7), SSIM; full in-app run upload → analysis
 **Fine-tuning (LoRA on SD 1.5, DiffusionDB CC0)** — see docs/FINETUNING.md:
 - Dataset pipeline, trainer, evaluator, API (`/api/finetune/*`), Fine-tuning dashboard page and LoRA selector for
   SD 1.5 generation are implemented and tested (tiny-UNet training mechanics tested on CPU).
-- Real training verified on MPS: run `sd15-ddb-r8-v1` (rank 8, lr 1e-4, 500 steps × 4 accumulation, 38 min, peak
-  7.5 GB): validation loss 0.1496 → 0.1488 (almost flat). Run `sd15-ddb-r16-v2` (rank 16, lr 5e-4) was still
-  training at handoff. **These runs and the dataset live only on the original Mac** (git-ignored); on a new machine
-  they must be re-created.
+- Real training verified on MPS: `sd15-ddb-r8-v1` (rank 8, lr 1e-4) and `sd15-ddb-r16-v2` (rank 16, lr 5e-4),
+  500 steps × 4 accumulation each; validation loss 0.14956 → 0.14884 for BOTH (−0.5 %, no evidence of a meaningful
+  change yet). Their final adapters, configs, logs and the split manifests are in `experiments/finetune/`
+  (≈ 19 MB, git-tracked): `python scripts/finetune_artifacts.py import` makes them visible to the app. The
+  DiffusionDB images (~1.9 GB) are NOT in git — download parts 1–3 to evaluate or re-train.
 - **`app/finetune/evaluate.py` has NOT yet been run on real models.** Its statistics function is unit-tested, but
   the end-to-end evaluation is unverified.
 
@@ -79,10 +87,9 @@ DINOv2, LPIPS (match CPU to ≤ 3e-7), SSIM; full in-app run upload → analysis
 ## Remaining work
 
 1. Set up and verify the environment on the new machine (see prompt). On NVIDIA, CUDA is selected automatically.
-2. Re-create fine-tuning data and runs:
-   `scripts/download_diffusiondb.py --parts 1 2 3` → `python -m app.finetune.dataset build` →
-   `python -m app.finetune.train --name sd15-ddb-r8-v1 --steps 500 --rank 8 --lr 1e-4` (and
-   `--name sd15-ddb-r16-v2 --rank 16 --alpha 16 --lr 5e-4`). The split is deterministic, so it will match.
+2. Import the shared runs (`python scripts/finetune_artifacts.py import`), download the images
+   (`scripts/download_diffusiondb.py --parts 1 2 3`) and rebuild the split (`python -m app.finetune.dataset build`);
+   check its manifest hashes match `experiments/finetune/dataset/dataset_card.json`.
 3. Run `python -m app.finetune.evaluate --run <run> --n 40` for each run; fix anything that fails; check the
    Fine-tuning page; add the measured results to docs/FINETUNING.md ("Runs and results").
 4. Use the LoRA selector on real reference photographs (A/D/B protocol, base vs LoRA pairs appear automatically in

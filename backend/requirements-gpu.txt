@@ -11,3 +11,4 @@ safetensors>=0.4
 lpips>=0.1.4
 peft>=0.13          # LoRA fine-tuning
 pyarrow>=17         # DiffusionDB metadata
+psutil>=5.9         # memory diagnostics (required on Windows)

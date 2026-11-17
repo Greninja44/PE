@@ -208,3 +208,33 @@ def test_base_vs_lora_pairs_in_comparison(client, recon, worker_token, runs):
     clip = next(p for p in gp if p["metric"] == "clip_l14")
     assert clip["n_pairs"] == 1 and clip["lora_better"] == 1 and abs(clip["mean_diff_lora_minus_base"] - 0.05) < 1e-9
     assert FIXTURE_ATTRIBUTES  # fixtures only
+
+
+def test_artifact_export_import_roundtrip_and_sanitising(tmp_path, monkeypatch):
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location("fa", Path(__file__).resolve().parents[2] / "scripts" / "finetune_artifacts.py")
+    fa = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fa)
+    assert fa._sanitise_text('"cmd": "/Users/someone/PE/x.py"') == '"cmd": "~/PE/x.py"'
+    assert fa._sanitise_text('"cmd": "/home/someone/PE"') == '"cmd": "~/PE"'
+    local, shared = tmp_path / "local", tmp_path / "shared"
+    run = local / "runs" / "r1"
+    (run / "adapter").mkdir(parents=True)
+    (run / "config.json").write_text('{"command": "/Users/someone/PE/train.py"}')
+    (run / "status.json").write_text('{"state": "completed"}')
+    (run / "adapter" / "pytorch_lora_weights.safetensors").write_bytes(b"A")
+    stopped = local / "runs" / "r2"
+    stopped.mkdir(parents=True)
+    (stopped / "status.json").write_text('{"state": "stopped"}')
+    monkeypatch.setattr(fa, "LOCAL", local)
+    monkeypatch.setattr(fa, "SHARED", shared)
+    monkeypatch.setattr(fa, "ROOT", tmp_path)
+    assert fa.export() == 0
+    assert (shared / "runs" / "r1" / "adapter" / "pytorch_lora_weights.safetensors").read_bytes() == b"A"
+    assert "someone" not in (shared / "runs" / "r1" / "config.json").read_text()
+    assert not (shared / "runs" / "r2").exists()  # only completed runs are shared
+    monkeypatch.setattr(fa, "LOCAL", tmp_path / "other_machine")
+    assert fa.import_() == 0
+    assert (tmp_path / "other_machine" / "runs" / "r1" / "status.json").exists()

@@ -307,12 +307,12 @@ def test_stay_awake_holds_and_releases_assertion(monkeypatch):
 
     from app.runtime import power
 
-    if sys.platform != "darwin":
+    if sys.platform not in ("darwin", "win32"):
         with power.stay_awake() as held:
             assert held is False
         return
     with power.stay_awake() as held:
-        assert held is True
+        assert held is True  # caffeinate (macOS) / SetThreadExecutionState (Windows)
     monkeypatch.setenv("PE_ALLOW_SLEEP", "1")
     with power.stay_awake() as held:
         assert held is False

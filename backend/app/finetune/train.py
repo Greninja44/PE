@@ -187,7 +187,8 @@ def run(a: argparse.Namespace) -> int:
            "device": dev, "frozen_dtype": str(dtype).removeprefix("torch."), "lora_dtype": "float32",
            "gradient_checkpointing": True, "dataset_card": card, "n_train": len(train_items),
            "n_val_used": min(a.val_items, len(val_items)), "created_at": datetime.now(UTC).isoformat(),
-           "code_fingerprint": code_fingerprint(), "command": " ".join(sys.argv)}
+           "code_fingerprint": code_fingerprint(),
+           "command": "python -m app.finetune.train " + " ".join(sys.argv[1:])}  # portable, no local paths
     _atomic_json(rdir / "config.json", cfg)
     status: dict[str, Any] = {"state": "preparing", "step": 0, "total_steps": a.steps, "message": "Caching latents"}
     _atomic_json(rdir / "status.json", status)

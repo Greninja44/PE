@@ -11,6 +11,12 @@ from __future__ import annotations
 import argparse
 import sys
 
+for _s in (sys.stdout, sys.stderr):  # Windows legacy code pages: never crash on ✓ → symbols
+    try:
+        _s.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 CONFIGS = ["*.json", "*.txt", "*.model", "tokenizer*", "merges.txt", "vocab*"]
 
 # key -> (repo id, allow_patterns, approx size, in default set). Ordered so the smallest complete pipeline

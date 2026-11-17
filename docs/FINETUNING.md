@@ -56,4 +56,23 @@ photographs with the main A/D/B protocol; the comparison table pairs base and Lo
 
 ## Runs and results (Apple M6, 16 GB)
 
-_Results are added below as they are measured._
+Both runs: 898 training images, 500 optimiser steps × 4 accumulation (≈ 2.2 epochs), seed 42, warm-up 50 steps,
+AdamW, bf16 frozen UNet + fp32 LoRA on MPS. Validation: 48 val images, fixed noise/timesteps.
+
+| Run | Rank / alpha | LR | Val loss start → end | Wall time | Peak footprint |
+|---|---|---|---|---|---|
+| `sd15-ddb-r8-v1` | 8 / 8 | 1e-4 | 0.14956 → 0.14884 (−0.5 %) | 38 min (3.7–4.0 s/step) | 7.53 GB |
+| `sd15-ddb-r16-v2` | 16 / 16 | 5e-4 | 0.14956 → 0.14884 (−0.5 %) | 58 min* | 6.96 GB |
+
+\* includes ≈ 25 min of system sleep before sleep prevention was added; ~3.7 s/step while awake.
+
+**Reading.** Both runs reduce validation loss by only ~0.5 %, and the stronger configuration (5× learning rate, 2× rank)
+ends at the same value. ε-prediction loss is dominated by irreducible noise, so small changes are normal, but these
+runs give **no evidence yet** that the adapters change generation meaningfully. Whether they do must be decided by the
+test-split evaluation below, which has **not been run yet** (the evaluator is implemented and unit-tested only).
+
+**Evaluation results:** _not yet measured._ Run `python -m app.finetune.evaluate --run <run> --n 40` for each run.
+
+The final adapters, configs and logs of both runs are shared in `experiments/finetune/` (≈ 19 MB; import with
+`python scripts/finetune_artifacts.py import`). DiffusionDB images are not in git; the split manifests are, so the
+identical split can be rebuilt after downloading parts 1–3.

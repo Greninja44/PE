@@ -45,8 +45,10 @@ def process_bytes(pid: int | None = None) -> tuple[int, str]:
 
         return psutil.Process(pid).memory_info().rss, "rss"
     except ImportError:  # pragma: no cover
-        import resource
-
+        try:
+            import resource  # Unix only
+        except ImportError:
+            return 0, "unavailable (install psutil)"
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss, "maxrss"
 
 

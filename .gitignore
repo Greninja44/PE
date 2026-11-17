@@ -62,3 +62,6 @@ experiments/bundles/
 Thumbs.db
 .idea/
 *.swp
+
+# --- Deliberately shared fine-tuning artifacts (small: LoRA adapters, logs, split manifests) ---
+!experiments/finetune/runs/*/adapter/*.safetensors

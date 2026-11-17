@@ -11,6 +11,12 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+
+for _s in (sys.stdout, sys.stderr):  # Windows legacy code pages: never crash on ✓ → symbols
+    try:
+        _s.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
 import zipfile
 from pathlib import Path
 
