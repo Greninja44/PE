@@ -10,3 +10,6 @@ safetensors>=0.4
 lpips>=0.1.4
 psutil>=5.9             # memory diagnostics
 huggingface_hub>=0.26
+# Fine-tuning (LoRA on SD 1.5) and DiffusionDB metadata
+peft>=0.13
+pyarrow>=17

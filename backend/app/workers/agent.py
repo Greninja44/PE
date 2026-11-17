@@ -182,8 +182,12 @@ def execute(client: WorkerClient, job: dict[str, Any], mm: ModelManager) -> None
     if handler is None:
         client.fail(jid, f"worker has no handler for '{jtype}'", retryable=False)
         return
+    from app.runtime.power import stay_awake
+
     hb = Heartbeat(client, jid)
     hb.start()
+    awake = stay_awake(jtype)
+    awake.__enter__()
     try:
         out = handler(job["payload"], lambda image_id: client.fetch_image(jid, image_id), hb.update, mm)
         hb.update(0.99, "Uploading results")
@@ -210,6 +214,7 @@ def execute(client: WorkerClient, job: dict[str, Any], mm: ModelManager) -> None
             return
         client.fail(jid, f"{type(e).__name__}: {e}", retryable=True)
     finally:
+        awake.__exit__(None, None, None)
         hb.stop()
 
 

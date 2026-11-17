@@ -1,4 +1,4 @@
-import { ChevronDown, PenLine, Play, Wand2 } from "lucide-react";
+import { ChevronDown, Loader2, PenLine, Play, Sparkles, Wand2 } from "lucide-react";
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { AttributeEditor, AttributeView } from "../components/AttributeEditor";
@@ -37,6 +37,14 @@ function AnalysisBody({ r, reload }: { r: Reconstruction; reload: () => Promise<
       await reload();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   };
+  const runBoth = async () => {
+    setError(null);
+    try {
+      for (const m of ["caption", "structured"] as const) await api.requestAnalysis(r.id, { provider, model: model || null, mode: m });
+      await reload();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  };
+  const busy = refAnalyses.some((a) => ["pending", "queued", "running"].includes(a.status));
 
   return (
     <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
@@ -69,7 +77,10 @@ function AnalysisBody({ r, reload }: { r: Reconstruction; reload: () => Promise<
               </div>
             </Field>
             <ErrorText error={error} />
-            <button className="btn-primary w-full" disabled={!prov?.available} onClick={run}><Play className="h-4 w-4" />Run {mode} analysis</button>
+            <button className="btn-primary w-full" disabled={!prov?.available || busy} onClick={runBoth} title="Queue a caption analysis (condition A) and a structured analysis (conditions B and D)">
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{busy ? "Analysing…" : "Analyse image (caption + structured)"}
+            </button>
+            <button className="btn-secondary w-full" disabled={!prov?.available} onClick={run}><Play className="h-4 w-4" />Run only {mode} analysis</button>
             {prov?.execution === "worker" && !sys.data?.gpu_worker_online && <Notice tone="warn">No inference worker online — the job will queue until one connects.</Notice>}
           </div>
         </Card>

@@ -48,7 +48,7 @@ export interface PromptVersion {
 
 export interface GenParams {
   model_key: string; seed: number; steps: number | null; cfg_scale: number | null; width: number | null;
-  height: number | null; negative_prompt: string;
+  height: number | null; negative_prompt: string; lora?: string | null;
 }
 
 export interface MetricResult {
@@ -132,6 +132,7 @@ export interface WorkerInfo {
 export interface SystemInfo {
   app: string; vlm_providers: Provider[]; local_vlm_models: Record<string, string>; generation_providers: Provider[];
   local_vlm_cached?: Record<string, boolean | null>;
+  lora_adapters?: { id: string; base_model: string | null; steps?: number; rank?: number; evaluated: boolean }[];
   models: ModelSpec[]; metrics: MetricInfo[]; templates: { id: string; description: string }[];
   jobs: Record<string, number>; workers: WorkerInfo[]; gpu_worker_online: boolean;
   worker_registration_enabled: boolean; code: { git_commit: string | null; git_dirty: boolean | null; source_sha256: string };
@@ -221,4 +222,45 @@ export interface Stats {
   comparison: Aggregate;
   by_metric_and_condition: Record<string, Record<string, { n: number; mean: number; min: number; max: number }>>;
   counts: { reconstructions: number; completed_metrics: number };
+}
+
+// ------------------------------------------------------------------------------------------- fine-tuning
+export interface FinetuneStatus {
+  state: "preparing" | "training" | "completed" | "stopped" | "failed"; step: number; total_steps: number;
+  message?: string; loss_ema?: number; val_loss?: number; val_loss_initial?: number; sec_per_step?: number;
+  eta_s?: number; epochs?: number; duration_s?: number; finished_at?: string;
+  memory?: { peak_process_gb?: number; system_available_gb?: number };
+  memory_peak?: { peak_process_gb?: number; peak_mps_driver_gb?: number };
+}
+
+export interface FinetunePaired {
+  n: number; lora_better: number; lora_worse: number; ties: number; mean_base: number | null; mean_lora: number | null;
+  mean_diff_lora_minus_base: number | null; sd_diff: number | null; higher_is_better: boolean;
+}
+
+export interface FinetuneRun {
+  id: string; base_model: string | null; adapter_available: boolean; status: FinetuneStatus;
+  config: { rank?: number; alpha?: number; lr?: number; steps?: number; grad_accum?: number; seed?: number; device?: string;
+    frozen_dtype?: string; n_train?: number; n_val_used?: number; created_at?: string; method?: string;
+    dataset_card?: FinetuneDatasetCard; code_fingerprint?: { git_commit?: string | null } };
+  evaluation: { n: number; settings: Record<string, unknown>; paired: Record<string, FinetunePaired>; created_at: string; notes: string[] } | null;
+}
+
+export interface FinetuneRunDetail extends FinetuneRun {
+  train_log: { step: number; loss: number; loss_ema: number; lr: number; seconds: number }[];
+  val_log: { step: number; val_loss: number }[];
+  checkpoints: string[];
+}
+
+export interface FinetuneEval {
+  run_id: string; n: number; settings: Record<string, unknown>; paired: Record<string, FinetunePaired>;
+  nsfw_flagged: { base: number; lora: number }; notes: string[]; created_at: string;
+  records: { index: number; prompt: string; seed: number; ref_file: string;
+    base: Record<string, number | string | boolean | null> & { file: string }; lora: Record<string, number | string | boolean | null> & { file: string } }[];
+}
+
+export interface FinetuneDatasetCard {
+  source: string; note: string; built_at: string; parts: number[]; filters: Record<string, unknown>; candidates: number;
+  dropped: Record<string, number>; counts: Record<string, number>; prompt_groups: Record<string, number>;
+  prompt_group_overlap: Record<string, number>; split_method: string;
 }

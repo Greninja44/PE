@@ -199,8 +199,8 @@ def test_torch_metric_never_reports_nan():
 class FakeDiffusersRunner:
     device = "mps"
 
-    def __init__(self, key):
-        self.key = key
+    def __init__(self, key, lora=None):
+        self.key, self.lora = key, lora
 
     def generate(self, prompt, params, progress_cb=None):
         from app.generation.base import GenerationOutput
@@ -300,3 +300,19 @@ def test_diffusers_runner_flags_first_call_warmup():
     second = r.generate("a", GenerationParams(model_key="sd_turbo"))
     assert first.runtime_info["first_call_after_load"] is True
     assert second.runtime_info["first_call_after_load"] is False
+
+
+def test_stay_awake_holds_and_releases_assertion(monkeypatch):
+    import sys
+
+    from app.runtime import power
+
+    if sys.platform != "darwin":
+        with power.stay_awake() as held:
+            assert held is False
+        return
+    with power.stay_awake() as held:
+        assert held is True
+    monkeypatch.setenv("PE_ALLOW_SLEEP", "1")
+    with power.stay_awake() as held:
+        assert held is False

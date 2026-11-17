@@ -68,7 +68,8 @@ class HFInferenceProvider(GenerationProvider):
 class DiffusersRunner:
     """Local diffusers execution. Imported and instantiated ONLY in the GPU worker process."""
 
-    def __init__(self, model_key: str, cpu_offload: bool | None = None, device: str | None = None) -> None:
+    def __init__(self, model_key: str, cpu_offload: bool | None = None, device: str | None = None,
+                 lora: str | None = None) -> None:
         if model_key not in MODEL_REGISTRY:
             raise ValueError(f"Model '{model_key}' is not in the registry")
         import torch
@@ -110,6 +111,13 @@ class DiffusersRunner:
         self.attention_slicing = s.attention_slicing == "on" or (s.attention_slicing == "auto" and self.device == "mps")
         if self.attention_slicing:
             self.pipe.enable_attention_slicing()
+        self.lora, self.lora_sha256 = None, None
+        if lora:
+            from app.finetune.registry import adapter_file, adapter_sha256
+
+            f = adapter_file(lora)  # validates the id and resolves inside the runs directory only
+            self.pipe.load_lora_weights(str(f.parent), weight_name=f.name, adapter_name="ft")
+            self.lora, self.lora_sha256 = lora, adapter_sha256(lora)
         self.pipe.set_progress_bar_config(disable=True)
         self._calls = 0
 
@@ -156,6 +164,7 @@ class DiffusersRunner:
             # The first call after loading includes one-off kernel compilation / warm-up (measured on MPS: ~5 s vs
             # ~0.3 s for SD-Turbo); comparisons of generation time must exclude it.
             "first_call_after_load": self._calls == 0,
+            "lora": getattr(self, "lora", None), "lora_sha256": getattr(self, "lora_sha256", None),
         }
         self._calls += 1
         if nsfw is not None:

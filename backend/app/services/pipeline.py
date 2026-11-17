@@ -165,6 +165,13 @@ def start_generation(db: Session, recon: Reconstruction, pv: PromptVersion, para
     if not avail.available:
         raise PipelineError(f"Provider '{provider_name}' unavailable: {avail.reason}")
     spec = MODEL_REGISTRY[params.model_key]
+    if params.lora:
+        from app.finetune.registry import RunNotFound, adapter_file
+
+        try:
+            adapter_file(params.lora)
+        except RunNotFound as e:
+            raise PipelineError(str(e)) from e
     if not params.negative_prompt:
         params = params.model_copy(update={"negative_prompt": pv.negative})
     g = GenerationRun(reconstruction_id=recon.id, prompt_version_id=pv.id, condition=condition, provider=provider.name,
@@ -175,7 +182,8 @@ def start_generation(db: Session, recon: Reconstruction, pv: PromptVersion, para
         job = create_job(db, "generate", {
             "generation_id": g.id, "model_key": spec.key, "prompt": pv.positive,
             "negative_prompt": params.negative_prompt, "seed": params.seed, "steps": params.steps,
-            "cfg_scale": params.cfg_scale, "width": params.width, "height": params.height}, commit=False)
+            "cfg_scale": params.cfg_scale, "width": params.width, "height": params.height, "lora": params.lora},
+            commit=False)
         g.job_id, g.status = job.id, "queued"
         db.commit()
     else:

@@ -75,7 +75,7 @@ function GenBody({ r, reload }: { r: Reconstruction; reload: () => Promise<void>
                 </select>
               </Field>
               {prov && <p className="text-xs text-slate-400">{prov.description}</p>}
-              <GenParamsForm models={models} value={params} onChange={setParams} />
+              <GenParamsForm models={models} value={params} onChange={setParams} loras={sys.data?.lora_adapters ?? []} />
             </div>
           )}
         </Card>
@@ -141,7 +141,7 @@ export function GenerationCard({ g }: { g: Generation }) {
       <ImageFrame className="rounded-none border-0" src={g.output_image?.url}
         placeholder={g.status === "failed" ? "Generation failed" : g.provider === "gpu_worker" ? `${g.status} — awaiting worker` : g.status}
         label={<span className="flex items-center gap-2">v{g.prompt_version} · {g.model_key}<StatusBadge status={g.status} /></span>}
-        sub={g.condition ? <Pill tone="accent">{CONDITION_LABEL[g.condition]}</Pill> : undefined} />
+        sub=<span className="flex flex-wrap gap-1">{g.condition && <Pill tone="accent">{CONDITION_LABEL[g.condition]}</Pill>}{g.params.lora && <Pill tone="emerald">LoRA · {g.params.lora}</Pill>}</span> />
       <div className="space-y-2 p-3 text-xs">
         <p className="mono line-clamp-3 text-slate-300" title={g.positive}>{g.positive}</p>
         <KV items={[["seed", <span className="font-mono">{g.params.seed}</span>], ["steps / cfg", <span className="font-mono">{g.params.steps} / {g.params.cfg_scale}</span>],

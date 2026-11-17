@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import routes_pipeline, routes_system, routes_worker
+from app.api import routes_finetune, routes_pipeline, routes_system, routes_worker
 from app.config.settings import get_settings
 from app.database.session import init_engine
 
@@ -29,6 +29,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_system.router)
     app.include_router(routes_pipeline.router)
     app.include_router(routes_worker.router)
+    app.include_router(routes_finetune.router)
     return app
 
 

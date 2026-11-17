@@ -63,12 +63,16 @@ class GenerationParams(BaseModel):
     width: int | None = None
     height: int | None = None
     negative_prompt: str = ""
+    lora: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$",
+                             description="Fine-tuning run id (SD 1.5 only); None = base model")
 
     @model_validator(mode="after")
     def _apply_defaults_and_validate(self) -> GenerationParams:
         spec = MODEL_REGISTRY.get(self.model_key)
         if spec is None:
             raise ValueError(f"Unknown model '{self.model_key}'. Options: {sorted(MODEL_REGISTRY)}")
+        if self.lora and spec.key != "sd15":
+            raise ValueError("LoRA adapters are trained on SD 1.5 and can only be used with model_key 'sd15'")
         self.steps = spec.default_steps if self.steps is None else self.steps
         self.cfg_scale = spec.default_cfg if self.cfg_scale is None else self.cfg_scale
         self.width = spec.default_size if self.width is None else self.width

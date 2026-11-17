@@ -6,6 +6,7 @@ import { ComparePage } from "./pages/ComparePage";
 import { EvaluationPage } from "./pages/EvaluationPage";
 import { ExperimentsPage } from "./pages/ExperimentsPage";
 import { FindingsPage } from "./pages/FindingsPage";
+import { FinetunePage } from "./pages/FinetunePage";
 import { GenerationPage } from "./pages/GenerationPage";
 import { MethodologyPage } from "./pages/MethodologyPage";
 import { NewReconstructionPage } from "./pages/NewReconstructionPage";
@@ -30,6 +31,7 @@ export default function App() {
           <Route path="/compare" element={<ComparePage />} />
           <Route path="/experiments" element={<ExperimentsPage />} />
           <Route path="/findings" element={<FindingsPage />} />
+          <Route path="/finetune" element={<FinetunePage />} />
           <Route path="/methodology" element={<MethodologyPage />} />
           <Route path="*" element={<OverviewPage />} />
         </Route>

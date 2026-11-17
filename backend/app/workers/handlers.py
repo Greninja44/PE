@@ -56,11 +56,12 @@ def handle_generate(payload: dict[str, Any], fetch: FetchImage, progress: Progre
 
     p = GeneratePayload.model_validate(payload)
     params = GenerationParams(model_key=p.model_key, seed=p.seed, steps=p.steps, cfg_scale=p.cfg_scale,
-                              width=p.width, height=p.height, negative_prompt=p.negative_prompt)
-    progress(0.05, f"Loading {p.model_key}")
+                              width=p.width, height=p.height, negative_prompt=p.negative_prompt, lora=p.lora)
+    key = p.model_key + (f"+lora:{p.lora}" if p.lora else "")
+    progress(0.05, f"Loading {key}")
     with PeakSampler() as mem:
         t0 = time.perf_counter()
-        runner = mm.get("diffusion", p.model_key, lambda: DiffusersRunner(p.model_key),
+        runner = mm.get("diffusion", key, lambda: DiffusersRunner(p.model_key, lora=p.lora),
                         est_gb=MODEL_REGISTRY[p.model_key].est_gb)
         load_s = time.perf_counter() - t0
         progress(0.1, f"Denoising on {runner.device}")

@@ -72,6 +72,14 @@ def _hf_cached(repo_id: str) -> bool | None:
     return any(p.exists() for ext in ("*.safetensors", "*.bin") for p in snaps.glob(f"*/**/{ext}"))
 
 
+def _lora_adapters() -> list[dict[str, Any]]:
+    from app.finetune.registry import list_runs
+
+    return [{"id": r["id"], "base_model": r["base_model"], "steps": r["config"].get("steps"),
+             "rank": r["config"].get("rank"), "evaluated": r["evaluation"] is not None}
+            for r in list_runs() if r["adapter_available"]]
+
+
 @router.get("/system")
 def system(db: Session = DB) -> dict[str, Any]:
     vlm = []
@@ -108,6 +116,7 @@ def system(db: Session = DB) -> dict[str, Any]:
                     "recommended_16gb": s.recommended_16gb, "downloaded": _hf_cached(s.hf_id)}
                    for s in MODEL_REGISTRY.values()],
         "metrics": metrics,
+        "lora_adapters": _lora_adapters(),
         "templates": [{"id": t.id, "description": t.description} for t in TEMPLATES.values()],
         "jobs": {k: counts.get(k, 0) for k in ("queued", "running", "succeeded", "failed", "cancelled")},
         "workers": workers, "gpu_worker_online": any(w["online"] for w in workers),

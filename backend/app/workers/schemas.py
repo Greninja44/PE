@@ -48,6 +48,7 @@ class GeneratePayload(_Strict):
     cfg_scale: float = Field(ge=0, le=30)
     width: int = Field(ge=256, le=1536)
     height: int = Field(ge=256, le=1536)
+    lora: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")  # run id, never a path
 
     @field_validator("model_key")
     @classmethod

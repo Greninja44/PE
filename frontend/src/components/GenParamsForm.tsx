@@ -7,8 +7,9 @@ export const defaultParams = (m?: ModelSpec): GenParams => ({
   width: m?.default_size ?? 512, height: m?.default_size ?? 512, negative_prompt: "",
 });
 
-export function GenParamsForm({ models, value, onChange, showNegative = true }: {
+export function GenParamsForm({ models, value, onChange, showNegative = true, loras = [] }: {
   models: ModelSpec[]; value: GenParams; onChange: (p: GenParams) => void; showNegative?: boolean;
+  loras?: { id: string; base_model: string | null; steps?: number; rank?: number; evaluated: boolean }[];
 }) {
   const spec = models.find((m) => m.key === value.model_key);
   const set = <K extends keyof GenParams>(k: K, v: GenParams[K]) => onChange({ ...value, [k]: v });
@@ -16,11 +17,19 @@ export function GenParamsForm({ models, value, onChange, showNegative = true }: 
   return (
     <div className="space-y-3">
       <Field label="Model" hint={spec ? `${spec.hf_id} · ${spec.vram_note}` : undefined}>
-        <select className="input" value={value.model_key} onChange={(e) => onChange({ ...defaultParams(models.find((m) => m.key === e.target.value)), seed: value.seed, negative_prompt: value.negative_prompt })}>
+        <select className="input" value={value.model_key} onChange={(e) => onChange({ ...defaultParams(models.find((m) => m.key === e.target.value)), seed: value.seed, negative_prompt: value.negative_prompt, lora: null })}>
           {models.map((m) => <option key={m.key} value={m.key}>{m.label}{m.downloaded === false ? " — not downloaded" : ""}{m.recommended_16gb === false ? " — not recommended on 16 GB" : ""}</option>)}
         </select>
       </Field>
       {spec?.notes && <p className="text-xs text-slate-400">{spec.notes}</p>}
+      {value.model_key === "sd15" && (
+        <Field label="Fine-tuned adapter (LoRA)" hint={loras.length ? "Same model, seed and settings with and without an adapter form a base-vs-LoRA pair." : "No completed fine-tuning runs yet (see Fine-tuning)."}>
+          <select className="input" value={value.lora ?? ""} onChange={(e) => onChange({ ...value, lora: e.target.value || null })} disabled={!loras.length}>
+            <option value="">None — base SD 1.5</option>
+            {loras.filter((l) => l.base_model === "sd15").map((l) => <option key={l.id} value={l.id}>{l.id} · r{l.rank} · {l.steps} steps{l.evaluated ? " · evaluated" : ""}</option>)}
+          </select>
+        </Field>
+      )}
       {spec?.downloaded === false && <p className="text-xs text-amber-300">Weights are not in the local cache: the first run downloads them (~{spec.est_gb ?? "?"} GB) and will take a while. Prefer <span className="mono">scripts/download_models.py</span> beforehand.</p>}
       {spec?.recommended_16gb === false && <p className="text-xs text-amber-300">This model needs ≈{spec.est_gb} GB for weights alone; on a 16 GB Mac it is likely to swap or fail. It has not been verified on this machine.</p>}
       <div className="grid grid-cols-2 gap-3">

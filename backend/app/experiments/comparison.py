@@ -37,7 +37,7 @@ SELECTION_BIASED = {"C_refined_best"}
 PAIRS = (("A_caption", "B_structured"), ("A_caption", "D_detailed"), ("D_detailed", "B_structured"),
          ("B_structured", "C_refined_final"), ("C_iter0", "C_refined_final"))
 COMPARISON_METRICS = ("clip_l14", "dinov2_base", "ssim", "lpips_alex", "clip_b32")
-CONFIG_KEYS = ("model_key", "seed", "steps", "cfg_scale", "width", "height")
+CONFIG_KEYS = ("model_key", "seed", "steps", "cfg_scale", "width", "height", "lora")
 
 
 def includes_warmup(g: GenerationRun) -> bool:
@@ -98,6 +98,7 @@ def generation_row(g: GenerationRun, ref: dict[str, Any] | None, ratings: list[H
         "prompt": pv.positive, "prompt_chars": len(pv.positive), "prompt_words": len(pv.positive.split()),
         "prompt_clip_tokens_approx": approx_clip_tokens(pv.positive),
         "model_key": g.model_key, "params": {k: (g.params or {}).get(k) for k in CONFIG_KEYS[1:]},
+        "generator": f"lora:{(g.params or {}).get('lora')}" if (g.params or {}).get("lora") else "base",
         "config_key": "|".join(str(x) for x in config_key(g)),
         "device": (g.runtime_info or {}).get("device"), "generation_s": g.duration_s,
         "includes_warmup": includes_warmup(g),
@@ -205,7 +206,35 @@ def aggregate(db: Session, experiment_id: str | None = None) -> dict[str, Any]:
                                "b_better": wins, "b_worse": losses, "ties": ties,
                                "mean_diff_b_minus_a": sum(diffs) / len(diffs),
                                "selection_biased": a in SELECTION_BIASED or b in SELECTION_BIASED})
-    return {"groups": groups_out, "paired": paired, "metrics": _metric_meta(), "condition_order": CONDITION_ORDER,
+    # Base vs LoRA: same reference, same prompt version, identical settings except the adapter.
+    by_cfg: dict[tuple[Any, ...], dict[str | None, GenerationRun]] = defaultdict(dict)
+    for g in sorted(gens, key=lambda x: x.created_at):
+        p = g.params or {}
+        k = (g.reconstruction_id, g.prompt_version_id, g.model_key, *[p.get(c) for c in CONFIG_KEYS[1:-1]])
+        by_cfg[k][p.get("lora")] = g
+    generator_pairs = []
+    adapters = sorted({lo for d in by_cfg.values() for lo in d if lo})
+    for ad in adapters:
+        for metric in COMPARISON_METRICS:
+            hib = METRICS[metric].higher_is_better
+            diffs = []
+            for d in by_cfg.values():
+                if None not in d or ad not in d:
+                    continue
+                vb = next((m.value for m in d[None].metrics if m.metric == metric and m.role == "evaluation"
+                           and m.status == "completed"), None)
+                vl = next((m.value for m in d[ad].metrics if m.metric == metric and m.role == "evaluation"
+                           and m.status == "completed"), None)
+                if vb is not None and vl is not None:
+                    diffs.append(vl - vb)
+            if diffs:
+                better = sum((x > 1e-9) if hib else (x < -1e-9) for x in diffs)
+                worse = sum((x < -1e-9) if hib else (x > 1e-9) for x in diffs)
+                generator_pairs.append({"lora": ad, "metric": metric, "higher_is_better": hib, "n_pairs": len(diffs),
+                                        "lora_better": better, "lora_worse": worse,
+                                        "ties": len(diffs) - better - worse,
+                                        "mean_diff_lora_minus_base": sum(diffs) / len(diffs)})
+    return {"groups": groups_out, "paired": paired, "generator_pairs": generator_pairs, "metrics": _metric_meta(), "condition_order": CONDITION_ORDER,
             "n_reconstructions": len(recons), "n_completed_generations": len(gens),
             "notes": ["Values are genuine completed metric results; missing values are excluded, never imputed.",
                       "C_refined_best is selected by the optimisation metric after the fact and is biased upward.",

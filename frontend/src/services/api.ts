@@ -1,5 +1,5 @@
 import type {
-  Aggregate, Analysis, Attributes, BuiltPrompt, Comparison, ComparisonTable, HumanRating, DemoBundle, DemoBundleSummary, Experiment, GenParams, Generation,
+  Aggregate, Analysis, FinetuneDatasetCard, FinetuneEval, FinetuneRun, FinetuneRunDetail, Attributes, BuiltPrompt, Comparison, ComparisonTable, HumanRating, DemoBundle, DemoBundleSummary, Experiment, GenParams, Generation,
   Job, MetricResult, PromptDiff, PromptVersion, Reconstruction, ReconstructionSummary, RefinementSession, Stats,
   SystemInfo,
 } from "../types/api";
@@ -94,4 +94,10 @@ export const api = {
   writeReport: (eid: string) => post<Record<string, string>>(`/api/experiments/${eid}/reports`),
   reports: () => request<{ name: string; size_bytes: number }[]>("/api/reports"),
   fingerprint: () => request<Record<string, unknown>>("/api/fingerprint"),
+
+  finetuneDataset: () => request<{ built: boolean; card: FinetuneDatasetCard | null; raw_parts_present: string[] }>("/api/finetune/dataset"),
+  finetuneRuns: () => request<FinetuneRun[]>("/api/finetune/runs"),
+  finetuneRun: (id: string) => request<FinetuneRunDetail>(`/api/finetune/runs/${id}`),
+  finetuneEval: (id: string) => request<FinetuneEval>(`/api/finetune/runs/${id}/eval`),
+  finetuneFileUrl: (id: string, name: string) => `/api/finetune/runs/${id}/files/${name}`,
 };
